@@ -1,0 +1,23 @@
+services:
+  indiserver:
+    build: ./indiserver
+    container_name: indiserver
+    restart: unless-stopped
+    privileged: true          # needed for USB device access
+    network_mode: host        # INDI clients connect on port 7624
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ./config:/config
+      - ./shots:/shots
+    environment:
+      - TZ=Australia/Sydney
+
+  webmanager:
+    image: indidocker/iparcos:latest
+    container_name: indi-webmanager
+    restart: unless-stopped
+    network_mode: host        # serves on port 8624
+    depends_on:
+      - indiserver
+    environment:
+      - TZ=Australia/Sydney
