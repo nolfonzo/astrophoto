@@ -12,16 +12,24 @@ services:
     environment:
       - TZ=${TZ:-UTC}
 
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: astrophoto-mosquitto
+    restart: unless-stopped
+    network_mode: host        # clients connect on port 1883
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
   mqtt-bridge:
     build: ./mqtt-bridge
     container_name: astrophoto-mqtt
     restart: unless-stopped
-    network_mode: host        # reaches indiserver on localhost:7624 and MQTT broker on network
+    network_mode: host
     volumes:
       - ./shots:/shots
     environment:
-      - MQTT_HOST=${MQTT_HOST:-localhost}
-      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_HOST=localhost
+      - MQTT_PORT=1883
       - MQTT_PREFIX=${MQTT_PREFIX:-astrophoto}
       - INDI_HOST=localhost
       - INDI_PORT=7624
@@ -29,5 +37,4 @@ services:
       - TZ=${TZ:-UTC}
     depends_on:
       - indiserver
-
-  # webmanager: optional INDI web UI — add when a working arm64 image is available
+      - mosquitto
