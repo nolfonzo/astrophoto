@@ -10,7 +10,25 @@ services:
       - ./config:/config
       - ./shots:/shots
     environment:
-      - TZ=Australia/Sydney
+      - TZ=${TZ:-UTC}
+
+  mqtt-bridge:
+    build: ./mqtt-bridge
+    container_name: astrophoto-mqtt
+    restart: unless-stopped
+    network_mode: host        # reaches indiserver on localhost:7624 and MQTT broker on network
+    volumes:
+      - ./shots:/shots
+    environment:
+      - MQTT_HOST=${MQTT_HOST:-localhost}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_PREFIX=${MQTT_PREFIX:-astrophoto}
+      - INDI_HOST=localhost
+      - INDI_PORT=7624
+      - CAMERA_DEVICE=GPhoto CCD
+      - TZ=${TZ:-UTC}
+    depends_on:
+      - indiserver
 
   webmanager:
     image: indidocker/iparcos:latest
@@ -20,4 +38,4 @@ services:
     depends_on:
       - indiserver
     environment:
-      - TZ=Australia/Sydney
+      - TZ=${TZ:-UTC}
