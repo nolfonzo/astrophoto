@@ -302,18 +302,18 @@ def on_message(client, userdata, msg):
         log.info('Abort signalled')
 
 
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+def on_connect(client, userdata, connect_flags, reason_code, properties):
+    if not reason_code.is_failure:
         log.info(f'MQTT connected to {MQTT_HOST}:{MQTT_PORT}')
         client.subscribe(f'{MQTT_PREFIX}/command/#')
         pub('status', {'state': 'idle'})
     else:
-        log.error(f'MQTT connect failed rc={rc}')
+        log.error(f'MQTT connect failed: {reason_code}')
 
 
 def main():
     global _mqtt_client
-    _mqtt_client = mqtt.Client()
+    _mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     _mqtt_client.on_connect = on_connect
     _mqtt_client.on_message = on_message
 
