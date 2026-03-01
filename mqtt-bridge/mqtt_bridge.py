@@ -55,6 +55,7 @@ class INDIClient:
         while time.time() < deadline:
             try:
                 self._sock = socket.create_connection((self.host, self.port), timeout=5)
+                self._sock.settimeout(30)  # allow up to 30s between INDI messages
                 self._running = True
                 threading.Thread(target=self._reader, daemon=True).start()
                 self._send('<getProperties version="1.7"/>')
