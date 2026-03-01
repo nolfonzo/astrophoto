@@ -169,26 +169,37 @@ class INDIClient:
 
         deadline = time.time() + timeout
         found_exposure = False
-        while time.time() < deadline and not found_exposure:
+        drain_until = None  # set after CCD_EXPOSURE found, to collect remaining properties
+
+        while True:
+            now = time.time()
+            if drain_until:
+                if now > drain_until:
+                    break  # done draining
+            elif now > deadline:
+                break  # timed out waiting for CCD_EXPOSURE
+
             try:
                 ev = self._events.get(timeout=1)
                 e = ev.get('elem')
                 if e is None or e.get('device') != CAMERA_DEV:
                     continue
                 tag, name = ev['tag'], e.get('name', '')
-                # Build ISO label→switch map
                 if tag == 'defSwitchVector' and name == 'CCD_ISO':
                     for child in e:
                         label = child.get('label', '').strip()
                         sname = child.get('name', '')
                         if label and sname:
                             self._iso_map[label] = sname
-                    log.info(f'ISO map: {len(self._iso_map)} values available')
-                # Ready when CCD_EXPOSURE appears
+                    log.info(f'ISO map: {len(self._iso_map)} values')
                 elif tag in ('defNumberVector', 'setNumberVector') and name == 'CCD_EXPOSURE':
-                    found_exposure = True
+                    if not found_exposure:
+                        found_exposure = True
+                        drain_until = time.time() + 3  # collect remaining props for 3s
             except queue.Empty:
-                pass
+                if drain_until:
+                    break  # queue empty after CCD_EXPOSURE, we're done
+
         return found_exposure
 
     # ---- INDI commands ----
