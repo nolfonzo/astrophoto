@@ -49,6 +49,7 @@ class INDIClient:
         self._buf = ''
         self._events = queue.Queue()
         self._running = False
+        self._iso_map = {}  # label (e.g. "800") -> switch name (e.g. "ISO14")
 
     def connect(self, timeout=30):
         deadline = time.time() + timeout
@@ -162,18 +163,33 @@ class INDIClient:
         )
 
     def wait_ready(self, timeout=60):
-        """Connect the driver then wait until CCD_EXPOSURE is available."""
-        # Wait for initial property dump, then send connect
+        """Connect the driver, build ISO map, wait until CCD_EXPOSURE is available."""
         time.sleep(1)
         self.connect_device()
 
-        def has_exposure(ev):
-            e = ev.get('elem')
-            return (e is not None
-                    and ev['tag'] in ('defNumberVector', 'setNumberVector')
-                    and e.get('device') == CAMERA_DEV
-                    and e.get('name') == 'CCD_EXPOSURE')
-        return self.wait_for(has_exposure, timeout=timeout) is not None
+        deadline = time.time() + timeout
+        found_exposure = False
+        while time.time() < deadline and not found_exposure:
+            try:
+                ev = self._events.get(timeout=1)
+                e = ev.get('elem')
+                if e is None or e.get('device') != CAMERA_DEV:
+                    continue
+                tag, name = ev['tag'], e.get('name', '')
+                # Build ISO label→switch map
+                if tag == 'defSwitchVector' and name == 'CCD_ISO':
+                    for child in e:
+                        label = child.get('label', '').strip()
+                        sname = child.get('name', '')
+                        if label and sname:
+                            self._iso_map[label] = sname
+                    log.info(f'ISO map: {len(self._iso_map)} values available')
+                # Ready when CCD_EXPOSURE appears
+                elif tag in ('defNumberVector', 'setNumberVector') and name == 'CCD_EXPOSURE':
+                    found_exposure = True
+            except queue.Empty:
+                pass
+        return found_exposure
 
     # ---- INDI commands ----
 
@@ -193,9 +209,14 @@ class INDIClient:
         )
 
     def set_iso(self, iso):
+        switch = self._iso_map.get(str(iso))
+        if not switch:
+            log.warning(f'ISO {iso} not in map, skipping. Available: {list(self._iso_map.keys())}')
+            return
+        log.info(f'Setting ISO {iso} -> {switch}')
         self._send(
             f'<newSwitchVector device="{CAMERA_DEV}" name="CCD_ISO">'
-            f'<oneSwitch name="ISO_{iso}">On</oneSwitch>'
+            f'<oneSwitch name="{switch}">On</oneSwitch>'
             f'</newSwitchVector>'
         )
 
