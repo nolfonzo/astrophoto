@@ -1,14 +1,15 @@
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y software-properties-common \
-    && add-apt-repository universe \
+RUN echo "deb http://ports.ubuntu.com/ubuntu-ports jammy universe" >> /etc/apt/sources.list \
+    && echo "deb http://ports.ubuntu.com/ubuntu-ports jammy-updates universe" >> /etc/apt/sources.list \
     && apt-get update && apt-get install -y \
-    indi-full \
+    indi-bin \
+    indi-gphoto \
+    indi-eqmod \
     gphoto2 \
     libgphoto2-dev \
-    indi-gphoto \
     udev \
     && rm -rf /var/lib/apt/lists/*
 
