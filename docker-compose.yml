@@ -30,12 +30,4 @@ services:
     depends_on:
       - indiserver
 
-  webmanager:
-    image: indidocker/iparcos:latest
-    container_name: indi-webmanager
-    restart: unless-stopped
-    network_mode: host        # serves on port 8624
-    depends_on:
-      - indiserver
-    environment:
-      - TZ=${TZ:-UTC}
+  # webmanager: optional INDI web UI — add when a working arm64 image is available

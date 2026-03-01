@@ -24,7 +24,6 @@ Sony a6400 ──USB──► Pi 4 (indiserver + mqtt-bridge)
 |---|---|---|
 | `indiserver` | INDI server + gphoto2 driver for Sony a6400 | 7624 |
 | `mqtt-bridge` | Bridges MQTT commands to INDI capture | — |
-| `indi-webmanager` | Web UI for managing INDI drivers | 8624 |
 
 ## Requirements
 
