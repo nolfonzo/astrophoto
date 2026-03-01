@@ -152,8 +152,21 @@ class INDIClient:
                 pass
         return None
 
-    def wait_ready(self, timeout=30):
-        """Wait until the camera driver exposes CCD_EXPOSURE."""
+    def connect_device(self):
+        """Send CONNECTION=On to the driver."""
+        self._send(
+            f'<newSwitchVector device="{CAMERA_DEV}" name="CONNECTION">'
+            f'<oneSwitch name="CONNECT">On</oneSwitch>'
+            f'<oneSwitch name="DISCONNECT">Off</oneSwitch>'
+            f'</newSwitchVector>'
+        )
+
+    def wait_ready(self, timeout=60):
+        """Connect the driver then wait until CCD_EXPOSURE is available."""
+        # Wait for initial property dump, then send connect
+        time.sleep(1)
+        self.connect_device()
+
         def has_exposure(ev):
             e = ev.get('elem')
             return (e is not None
