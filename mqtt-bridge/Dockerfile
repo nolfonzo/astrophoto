@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-RUN pip install --no-cache-dir paho-mqtt
+RUN pip install --no-cache-dir paho-mqtt Pillow
 
 COPY mqtt_bridge.py /mqtt_bridge.py
 

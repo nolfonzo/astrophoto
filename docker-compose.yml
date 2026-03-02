@@ -27,6 +27,7 @@ services:
     network_mode: host
     volumes:
       - ./shots:/shots
+      - ./config:/config      # profile.json persists here
     environment:
       - MQTT_HOST=localhost
       - MQTT_PORT=1883
@@ -38,3 +39,12 @@ services:
     depends_on:
       - indiserver
       - mosquitto
+
+  fileserver:
+    image: nginx:alpine
+    container_name: astrophoto-files
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./shots:/usr/share/nginx/html:ro
