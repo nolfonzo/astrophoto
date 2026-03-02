@@ -11,13 +11,15 @@ RUN apt-get update && apt-get install -y software-properties-common \
     indi-eqmod \
     gphoto2 \
     libgphoto2-dev \
+    python3 \
     udev \
     && rm -rf /var/lib/apt/lists/*
 
-# INDI server port
-EXPOSE 7624
+# INDI server + capture service ports
+EXPOSE 7624 7625
 
 COPY entrypoint.sh /entrypoint.sh
+COPY capture_service.py /capture_service.py
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "Starting capture service on port 7625..."
+python3 /capture_service.py &
+
 echo "Starting INDI server..."
 echo "Detected USB devices:"
 lsusb 2>/dev/null || echo "  (none or lsusb not available)"

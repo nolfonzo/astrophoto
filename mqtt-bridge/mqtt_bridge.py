@@ -45,7 +45,7 @@ INDI_HOST   = os.environ.get('INDI_HOST', 'localhost')
 INDI_PORT   = int(os.environ.get('INDI_PORT', '7624'))
 CAMERA_DEV  = os.environ.get('CAMERA_DEVICE', 'GPhoto CCD')
 PROFILE_FILE = os.environ.get('PROFILE_FILE', '/config/profile.json')
-GPHOTO2_AUTO_THRESHOLD = 1.0  # seconds: below this use gphoto2 discrete, at/above use INDI Bulb
+CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
 
 # ---- Camera profiles ----
 
@@ -103,20 +103,6 @@ def current_camera_cfg():
 
 def current_defaults():
     return _profile.get('defaults', dict(_PROFILE_DEFAULTS['defaults']))
-
-
-def current_capture_engine(exposure=None):
-    """Return 'star' or 'daytime' based on profile setting and optional exposure.
-    'auto' (default): daytime for exposures < GPHOTO2_AUTO_THRESHOLD, star otherwise.
-    'star': always use INDI Bulb (long exposures, star tracker).
-    'daytime': always use gphoto2 discrete shutter speeds.
-    """
-    engine = _profile.get('capture_engine', 'auto')
-    if engine == 'auto':
-        if exposure is not None and exposure < GPHOTO2_AUTO_THRESHOLD:
-            return 'daytime'
-        return 'star'
-    return engine  # 'star' or 'daytime'
 
 
 # ---- Mode helpers ----
@@ -185,10 +171,10 @@ def resolve_capture_params(params, mode):
 # ---- File discovery ----
 
 def find_latest_frame(output_dir, after_time):
-    """Find the most recently modified FITS/JPG/RAW file created after after_time."""
+    """Find the most recently modified FITS/JPG file created after after_time."""
     import glob as _glob
     candidates = []
-    for pattern in ('*.fits', '*.fit', '*.jpg', '*.jpeg', '*.arw', '*.ARW'):
+    for pattern in ('*.fits', '*.fit', '*.jpg', '*.jpeg'):
         candidates.extend(_glob.glob(os.path.join(output_dir, pattern)))
     recent = [f for f in candidates if os.path.getmtime(f) >= after_time]
     if not recent:
@@ -618,44 +604,6 @@ class INDIClient:
         return ev is not None
 
 
-# ---- gphoto2 capture (daytime discrete shutter speeds) ----
-
-def capture_one_frame_gphoto2(output, prefix, iso, exposure):
-    """Capture one frame using gphoto2 CLI with discrete shutter speed.
-
-    Uses gphoto2 directly — INDI driver is idle so it does not hold USB.
-    Returns True on success, False on failure.
-    """
-    import subprocess as _subprocess
-
-    if exposure < 1:
-        ss = f'1/{round(1 / exposure)}'
-    else:
-        ss = str(round(exposure))
-
-    # %n = sequential index (1, 2, …), %C = camera-chosen extension (jpg, arw, …)
-    filename_tpl = os.path.join(output, f'{prefix}_%n.%C')
-    cmd = [
-        'gphoto2',
-        '--set-config', f'shutterspeed={ss}',
-        '--set-config', f'iso={iso}',
-        '--capture-image-and-download',
-        '--filename', filename_tpl,
-        '--force-overwrite',
-    ]
-    log.info(f'gphoto2 capture: shutterspeed={ss} iso={iso}')
-    try:
-        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except _subprocess.TimeoutExpired:
-        log.error('gphoto2 timed out after 60s')
-        return False
-    if result.returncode != 0:
-        log.error(f'gphoto2 failed (rc={result.returncode}): {result.stderr.strip()}')
-        return False
-    log.info(f'gphoto2 output: {result.stdout.strip()}')
-    return True
-
-
 # ---- Capture logic ----
 
 PREVIEW_DEFAULTS = {'frames': 1, 'exposure': 0.001, 'iso': 1600}
@@ -706,26 +654,30 @@ def pub(subtopic, payload):
         _mqtt_client.publish(f'{MQTT_PREFIX}/{subtopic}', json.dumps(payload))
 
 
-def capture_one_frame(output, prefix, iso, exposure):
-    """Open a fresh INDI connection, take one frame, disconnect. Returns (ok, mode)."""
-    indi = INDIClient(INDI_HOST, INDI_PORT)
+def capture_one_frame(output, prefix, iso, exposure, engine='auto'):
+    """Delegate capture to the indiserver capture service. Returns (ok, file_path)."""
+    import urllib.request as _urllib
+    cfg = current_camera_cfg()
+    payload = json.dumps({
+        'exposure': exposure,
+        'iso': iso,
+        'prefix': prefix,
+        'output': output,
+        'engine': engine,
+        'sensor': {
+            'max_x': cfg['max_x'], 'max_y': cfg['max_y'],
+            'pixel_um': cfg['pixel_um'], 'bits': cfg['bits'],
+        },
+    }).encode()
+    url = f'http://{INDI_HOST}:{CAPTURE_SERVICE_PORT}/capture'
+    req = _urllib.Request(url, data=payload, headers={'Content-Type': 'application/json'})
     try:
-        indi.connect(timeout=30)
-        if not indi.wait_ready(timeout=30):
-            raise RuntimeError('Camera driver not ready in INDI server')
-        mode = indi.get_expprogram()
-        indi.set_upload_local(output)
-        indi.set_upload_prefix(prefix)
-        indi.set_ccd_info()
-        indi.set_capture_target_ram()
-        time.sleep(1)
-        if iso is not None:
-            indi.set_iso(iso)
-        ok = indi.expose(exposure, abort_check=lambda: not _capturing)
-        return ok, mode
-    finally:
-        indi.disconnect_device()
-        indi.close()
+        with _urllib.urlopen(req, timeout=exposure + 120) as resp:
+            result = json.loads(resp.read())
+    except Exception as e:
+        log.error(f'Capture service error: {e}')
+        return False, None
+    return result.get('ok', False), result.get('file')
 
 
 def run_capture(params):
@@ -734,35 +686,26 @@ def run_capture(params):
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
     delay = float(params.get('delay', 0))
+    engine = _profile.get('capture_engine', 'auto')
 
-    # --- Determine capture engine ---
-    defaults = current_defaults()
-    requested_exp = float(params.get('exposure', defaults['exposure']))
-    engine = current_capture_engine(requested_exp)
-
-    if engine == 'daytime':
-        # gphoto2 path: skip INDI mode probe, assume camera is in Manual
-        raw_mode = 'Manual'
-        mode = 'Manual'
-    else:
-        # INDI/Bulb path: probe camera mode
-        log.info('Probing camera mode...')
-        probe = INDIClient(INDI_HOST, INDI_PORT)
-        raw_mode = None
+    # Probe camera mode via INDI (used for param resolution and status reporting)
+    log.info('Probing camera mode...')
+    probe = INDIClient(INDI_HOST, INDI_PORT)
+    raw_mode = None
+    try:
+        probe.connect(timeout=15)
+        probe.wait_ready(timeout=20)
+        raw_mode = probe.get_expprogram()
+    except Exception as e:
+        log.warning(f'Mode probe failed: {e}')
+    finally:
         try:
-            probe.connect(timeout=15)
-            probe.wait_ready(timeout=20)
-            raw_mode = probe.get_expprogram()
-        except Exception as e:
-            log.warning(f'Mode probe failed: {e}')
-        finally:
-            try:
-                probe.disconnect_device()
-                probe.close()
-            except Exception:
-                pass
-        mode = normalise_mode(raw_mode)
-        _last_known_mode = mode
+            probe.disconnect_device()
+            probe.close()
+        except Exception:
+            pass
+    mode = normalise_mode(raw_mode)
+    _last_known_mode = mode
 
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
@@ -808,10 +751,7 @@ def run_capture(params):
             prefix = f'frame_{session_ts}_{i:04d}'
             frame_start = time.time()
             try:
-                if engine == 'daytime':
-                    ok = capture_one_frame_gphoto2(output, prefix, iso, exposure)
-                else:
-                    ok, _ = capture_one_frame(output, prefix, iso, exposure)
+                ok, frame_path = capture_one_frame(output, prefix, iso, exposure, engine)
             except Exception as e:
                 log.error(f'Frame {i} error: {e}')
                 pub('event/error', {'message': str(e)})
@@ -819,14 +759,11 @@ def run_capture(params):
                 return
 
             if not ok:
+                # One retry — recovers from occasional Sony PTP event miss
                 log.warning(f'Frame {i}: capture failed, retrying in 3s...')
                 time.sleep(3)
                 try:
-                    if engine == 'daytime':
-                        ok = capture_one_frame_gphoto2(output, prefix, iso, exposure)
-                    else:
-                        # Occasional Sony PTP event miss; one retry consistently recovers.
-                        ok, _ = capture_one_frame(output, prefix, iso, exposure)
+                    ok, frame_path = capture_one_frame(output, prefix, iso, exposure, engine)
                 except Exception as e:
                     log.error(f'Frame {i} retry error: {e}')
                     pub('event/error', {'message': str(e)})
@@ -838,9 +775,8 @@ def run_capture(params):
                 pub('status', {'state': 'idle', 'camera': camera})
                 return
 
-            # Find the file the INDI driver actually saved (it appends its own counter)
-            # and extract JPEG preview for /astro last.
-            frame_file = find_latest_frame(output, frame_start)
+            # Use path returned by capture service; fall back to disk scan if missing.
+            frame_file = frame_path or find_latest_frame(output, frame_start)
             log.info(f'Frame {i} saved as: {frame_file}')
             # ID derived from filename: HHMMSS_N — persistent, no registry needed
             time_part = session_ts.split('_')[1]   # HHMMSS from YYYYMMDD_HHMMSS
