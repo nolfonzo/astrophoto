@@ -28,6 +28,8 @@ services:
     volumes:
       - ./shots:/shots
       - ./config:/config      # profile.json persists here
+      - /dev/bus/usb:/dev/bus/usb  # needed for gphoto2 daytime captures
+    privileged: true           # USB device access for gphoto2
     environment:
       - MQTT_HOST=localhost
       - MQTT_PORT=1883

@@ -45,6 +45,7 @@ INDI_HOST   = os.environ.get('INDI_HOST', 'localhost')
 INDI_PORT   = int(os.environ.get('INDI_PORT', '7624'))
 CAMERA_DEV  = os.environ.get('CAMERA_DEVICE', 'GPhoto CCD')
 PROFILE_FILE = os.environ.get('PROFILE_FILE', '/config/profile.json')
+GPHOTO2_AUTO_THRESHOLD = 1.0  # seconds: below this use gphoto2 discrete, at/above use INDI Bulb
 
 # ---- Camera profiles ----
 
@@ -102,6 +103,20 @@ def current_camera_cfg():
 
 def current_defaults():
     return _profile.get('defaults', dict(_PROFILE_DEFAULTS['defaults']))
+
+
+def current_capture_engine(exposure=None):
+    """Return 'star' or 'daytime' based on profile setting and optional exposure.
+    'auto' (default): daytime for exposures < GPHOTO2_AUTO_THRESHOLD, star otherwise.
+    'star': always use INDI Bulb (long exposures, star tracker).
+    'daytime': always use gphoto2 discrete shutter speeds.
+    """
+    engine = _profile.get('capture_engine', 'auto')
+    if engine == 'auto':
+        if exposure is not None and exposure < GPHOTO2_AUTO_THRESHOLD:
+            return 'daytime'
+        return 'star'
+    return engine  # 'star' or 'daytime'
 
 
 # ---- Mode helpers ----
@@ -170,10 +185,10 @@ def resolve_capture_params(params, mode):
 # ---- File discovery ----
 
 def find_latest_frame(output_dir, after_time):
-    """Find the most recently modified FITS/JPG file created after after_time."""
+    """Find the most recently modified FITS/JPG/RAW file created after after_time."""
     import glob as _glob
     candidates = []
-    for pattern in ('*.fits', '*.fit', '*.jpg', '*.jpeg'):
+    for pattern in ('*.fits', '*.fit', '*.jpg', '*.jpeg', '*.arw', '*.ARW'):
         candidates.extend(_glob.glob(os.path.join(output_dir, pattern)))
     recent = [f for f in candidates if os.path.getmtime(f) >= after_time]
     if not recent:
@@ -603,6 +618,44 @@ class INDIClient:
         return ev is not None
 
 
+# ---- gphoto2 capture (daytime discrete shutter speeds) ----
+
+def capture_one_frame_gphoto2(output, prefix, iso, exposure):
+    """Capture one frame using gphoto2 CLI with discrete shutter speed.
+
+    Uses gphoto2 directly — INDI driver is idle so it does not hold USB.
+    Returns True on success, False on failure.
+    """
+    import subprocess as _subprocess
+
+    if exposure < 1:
+        ss = f'1/{round(1 / exposure)}'
+    else:
+        ss = str(round(exposure))
+
+    # %n = sequential index (1, 2, …), %C = camera-chosen extension (jpg, arw, …)
+    filename_tpl = os.path.join(output, f'{prefix}_%n.%C')
+    cmd = [
+        'gphoto2',
+        '--set-config', f'shutterspeed={ss}',
+        '--set-config', f'iso={iso}',
+        '--capture-image-and-download',
+        '--filename', filename_tpl,
+        '--force-overwrite',
+    ]
+    log.info(f'gphoto2 capture: shutterspeed={ss} iso={iso}')
+    try:
+        result = _subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except _subprocess.TimeoutExpired:
+        log.error('gphoto2 timed out after 60s')
+        return False
+    if result.returncode != 0:
+        log.error(f'gphoto2 failed (rc={result.returncode}): {result.stderr.strip()}')
+        return False
+    log.info(f'gphoto2 output: {result.stdout.strip()}')
+    return True
+
+
 # ---- Capture logic ----
 
 PREVIEW_DEFAULTS = {'frames': 1, 'exposure': 0.001, 'iso': 1600}
@@ -676,40 +729,49 @@ def capture_one_frame(output, prefix, iso, exposure):
 
 
 def run_capture(params):
-    global _capturing, _last_preview_path, _last_fits_path, _last_hq_jpeg_path
+    global _capturing, _last_preview_path, _last_fits_path, _last_hq_jpeg_path, _last_known_mode
 
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
     delay = float(params.get('delay', 0))
 
-    # --- Probe camera mode before resolving params ---
-    log.info('Probing camera mode...')
-    probe = INDIClient(INDI_HOST, INDI_PORT)
-    raw_mode = None
-    try:
-        probe.connect(timeout=15)
-        probe.wait_ready(timeout=20)
-        raw_mode = probe.get_expprogram()
-    except Exception as e:
-        log.warning(f'Mode probe failed: {e}')
-    finally:
-        try:
-            probe.disconnect_device()
-            probe.close()
-        except Exception:
-            pass
+    # --- Determine capture engine ---
+    defaults = current_defaults()
+    requested_exp = float(params.get('exposure', defaults['exposure']))
+    engine = current_capture_engine(requested_exp)
 
-    mode = normalise_mode(raw_mode)
-    global _last_known_mode
-    _last_known_mode = mode
+    if engine == 'daytime':
+        # gphoto2 path: skip INDI mode probe, assume camera is in Manual
+        raw_mode = 'Manual'
+        mode = 'Manual'
+    else:
+        # INDI/Bulb path: probe camera mode
+        log.info('Probing camera mode...')
+        probe = INDIClient(INDI_HOST, INDI_PORT)
+        raw_mode = None
+        try:
+            probe.connect(timeout=15)
+            probe.wait_ready(timeout=20)
+            raw_mode = probe.get_expprogram()
+        except Exception as e:
+            log.warning(f'Mode probe failed: {e}')
+        finally:
+            try:
+                probe.disconnect_device()
+                probe.close()
+            except Exception:
+                pass
+        mode = normalise_mode(raw_mode)
+        _last_known_mode = mode
+
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
 
-    log.info(f'Capture: {frames}x mode={mode} exp={exposure}s iso={iso} ignored={ignored} -> {output}')
+    log.info(f'Capture: engine={engine} {frames}x mode={mode} exp={exposure}s iso={iso} ignored={ignored} -> {output}')
 
     pub('status', {
         'state': 'capturing', 'frame': 0, 'total': frames,
-        'camera': camera, 'mode': mode,
+        'camera': camera, 'mode': mode, 'engine': engine,
         'exposure': exposure, 'iso': iso,
     })
 
@@ -746,7 +808,10 @@ def run_capture(params):
             prefix = f'frame_{session_ts}_{i:04d}'
             frame_start = time.time()
             try:
-                ok, _ = capture_one_frame(output, prefix, iso, exposure)
+                if engine == 'daytime':
+                    ok = capture_one_frame_gphoto2(output, prefix, iso, exposure)
+                else:
+                    ok, _ = capture_one_frame(output, prefix, iso, exposure)
             except Exception as e:
                 log.error(f'Frame {i} error: {e}')
                 pub('event/error', {'message': str(e)})
@@ -754,11 +819,14 @@ def run_capture(params):
                 return
 
             if not ok:
-                # Occasional Sony PTP event miss; one retry consistently recovers.
-                log.warning(f'Frame {i}: exposure failed, retrying in 3s...')
+                log.warning(f'Frame {i}: capture failed, retrying in 3s...')
                 time.sleep(3)
                 try:
-                    ok, _ = capture_one_frame(output, prefix, iso, exposure)
+                    if engine == 'daytime':
+                        ok = capture_one_frame_gphoto2(output, prefix, iso, exposure)
+                    else:
+                        # Occasional Sony PTP event miss; one retry consistently recovers.
+                        ok, _ = capture_one_frame(output, prefix, iso, exposure)
                 except Exception as e:
                     log.error(f'Frame {i} retry error: {e}')
                     pub('event/error', {'message': str(e)})
@@ -860,12 +928,25 @@ def on_message(client, userdata, msg):
         log.info(f'Defaults updated: {defaults}')
         pub('event/defaults', defaults)
 
+    elif topic == 'command/engine':
+        engine = payload.get('engine', '').lower()
+        if engine not in ('auto', 'star', 'daytime'):
+            pub('event/error', {
+                'message': f'Unknown engine: {engine}. Use: auto, star, daytime'
+            })
+            return
+        _profile['capture_engine'] = engine
+        save_profile()
+        log.info(f'Capture engine set to: {engine}')
+        pub('event/info', {'message': f'Capture engine: {engine}'})
+
     elif topic == 'query/status':
         camera = _profile.get('camera', 'unknown')
         pub('status', {
             'state': 'capturing' if _capturing else 'idle',
             'camera': camera,
             'mode': _last_known_mode,
+            'engine': _profile.get('capture_engine', 'auto'),
             'defaults': current_defaults(),
             'last_preview': _last_preview_path,
         })
