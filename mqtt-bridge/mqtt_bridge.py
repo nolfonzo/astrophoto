@@ -135,7 +135,9 @@ def resolve_capture_params(params, mode):
     ignored = []
 
     cfg = current_camera_cfg()
-    if is_manual(mode):
+    norm = normalise_mode(mode)
+    if is_manual(mode) or norm == 'Unknown':
+        # Manual mode, OR probe failed — honour all requested params either way
         exposure = float(params.get('exposure', defaults['exposure']))
         min_exp = cfg['min_exposure']
         max_exp = cfg['max_exposure']
@@ -157,7 +159,7 @@ def resolve_capture_params(params, mode):
         if 'exposure' in params:
             ignored.append('exposure')
     else:
-        # Auto / unknown — camera controls everything, don't override ISO either
+        # True Auto mode — camera controls everything, don't override ISO either
         exposure = 0.001
         iso = None
         if 'exposure' in params:
