@@ -111,16 +111,21 @@ def _resolve_iso(iso):
 # ── gphoto2 discrete shutter ──────────────────────────────────────────────────
 
 def _capture_gphoto2(exposure, iso, prefix, output):
+    errors = []
+
     matched_s, ss, ss_label = _resolve_shutterspeed(exposure)
     if not matched_s:
         req = f'1/{round(1/exposure)}s' if exposure < 1 else f'{exposure}s'
-        raise ValueError(f'Invalid shutter speed {req} — closest valid: {ss_label}s')
+        errors.append(f'invalid shutter speed {req} (closest: {ss_label}s)')
 
     iso_str = None
     if iso is not None:
         matched_i, iso_str, iso_label = _resolve_iso(iso)
         if not matched_i:
-            raise ValueError(f'Invalid ISO {iso} — closest valid: {iso_label}')
+            errors.append(f'invalid ISO {iso} (closest: {iso_label})')
+
+    if errors:
+        raise ValueError('; '.join(errors))
 
     os.makedirs(output, exist_ok=True)
     cmd = ['gphoto2', '--set-config', f'shutterspeed={ss}']
