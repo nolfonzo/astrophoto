@@ -42,16 +42,91 @@ _DEFAULT_SENSOR = {'max_x': 6000, 'max_y': 4000, 'pixel_um': 3.91, 'bits': 14}
 
 _lock = threading.Lock()   # one capture at a time
 
+# ── Valid discrete camera settings (Sony a6400, 1/3-stop increments) ──────────
+# (seconds, gphoto2-config-string, display-label)
+_SHUTTER_SPEEDS = [
+    (1/32000,'1/32000','1/32000'), (1/25000,'1/25000','1/25000'),
+    (1/20000,'1/20000','1/20000'), (1/16000,'1/16000','1/16000'),
+    (1/13000,'1/13000','1/13000'), (1/10000,'1/10000','1/10000'),
+    (1/8000, '1/8000', '1/8000'),  (1/6400, '1/6400', '1/6400'),
+    (1/5000, '1/5000', '1/5000'),  (1/4000, '1/4000', '1/4000'),
+    (1/3200, '1/3200', '1/3200'),  (1/2500, '1/2500', '1/2500'),
+    (1/2000, '1/2000', '1/2000'),  (1/1600, '1/1600', '1/1600'),
+    (1/1250, '1/1250', '1/1250'),  (1/1000, '1/1000', '1/1000'),
+    (1/800,  '1/800',  '1/800'),   (1/640,  '1/640',  '1/640'),
+    (1/500,  '1/500',  '1/500'),   (1/400,  '1/400',  '1/400'),
+    (1/320,  '1/320',  '1/320'),   (1/250,  '1/250',  '1/250'),
+    (1/200,  '1/200',  '1/200'),   (1/160,  '1/160',  '1/160'),
+    (1/125,  '1/125',  '1/125'),   (1/100,  '1/100',  '1/100'),
+    (1/80,   '1/80',   '1/80'),    (1/60,   '1/60',   '1/60'),
+    (1/50,   '1/50',   '1/50'),    (1/40,   '1/40',   '1/40'),
+    (1/30,   '1/30',   '1/30'),    (1/25,   '1/25',   '1/25'),
+    (1/20,   '1/20',   '1/20'),    (1/15,   '1/15',   '1/15'),
+    (1/13,   '1/13',   '1/13'),    (1/10,   '1/10',   '1/10'),
+    (1/8,    '1/8',    '1/8'),     (1/6,    '1/6',    '1/6'),
+    (1/5,    '1/5',    '1/5'),     (1/4,    '1/4',    '1/4'),
+    (0.3,    '0.3',    '0.3'),     (0.4,    '0.4',    '0.4'),
+    (0.5,    '0.5',    '0.5'),     (0.6,    '0.6',    '0.6'),
+    (0.8,    '0.8',    '0.8'),     (1.0,    '1',      '1'),
+    (1.3,    '1.3',    '1.3'),     (1.6,    '1.6',    '1.6'),
+    (2.0,    '2',      '2'),       (2.5,    '2.5',    '2.5'),
+    (3.2,    '3.2',    '3.2'),     (4.0,    '4',      '4'),
+    (5.0,    '5',      '5'),       (6.0,    '6',      '6'),
+    (8.0,    '8',      '8'),       (10.0,   '10',     '10'),
+    (13.0,   '13',     '13'),      (15.0,   '15',     '15'),
+    (20.0,   '20',     '20'),      (25.0,   '25',     '25'),
+    (30.0,   '30',     '30'),
+]
+
+# (iso-int, gphoto2-string)
+_ISO_VALUES = [
+    (100,'100'),(125,'125'),(160,'160'),(200,'200'),(250,'250'),(320,'320'),
+    (400,'400'),(500,'500'),(640,'640'),(800,'800'),(1000,'1000'),(1250,'1250'),
+    (1600,'1600'),(2000,'2000'),(2500,'2500'),(3200,'3200'),(4000,'4000'),
+    (5000,'5000'),(6400,'6400'),(8000,'8000'),(10000,'10000'),(12800,'12800'),
+    (16000,'16000'),(20000,'20000'),(25600,'25600'),(32000,'32000'),
+]
+
+import math as _math
+
+def _resolve_shutterspeed(exposure):
+    """Find closest valid shutter speed in log space.
+    Returns (matched, gphoto2_str, label). matched=True if within 2% of a valid value.
+    """
+    log_e = _math.log(exposure)
+    best = min(_SHUTTER_SPEEDS, key=lambda t: abs(_math.log(t[0]) - log_e))
+    matched = abs(exposure - best[0]) / best[0] <= 0.02
+    return matched, best[1], best[2]
+
+def _resolve_iso(iso):
+    """Find closest valid ISO in log space.
+    Returns (matched, gphoto2_str, label). matched=True if within 2% of a valid value.
+    """
+    log_i = _math.log(iso)
+    best = min(_ISO_VALUES, key=lambda t: abs(_math.log(t[0]) - log_i))
+    matched = abs(iso - best[0]) / best[0] <= 0.02
+    return matched, best[1], str(best[0])
+
 
 # ── gphoto2 discrete shutter ──────────────────────────────────────────────────
 
 def _capture_gphoto2(exposure, iso, prefix, output):
-    ss = f'1/{round(1/exposure)}' if exposure < 1 else str(round(exposure))
+    matched_s, ss, ss_label = _resolve_shutterspeed(exposure)
+    if not matched_s:
+        req = f'1/{round(1/exposure)}s' if exposure < 1 else f'{exposure}s'
+        raise ValueError(f'Invalid shutter speed {req} — closest valid: {ss_label}s')
+
+    iso_str = None
+    if iso is not None:
+        matched_i, iso_str, iso_label = _resolve_iso(iso)
+        if not matched_i:
+            raise ValueError(f'Invalid ISO {iso} — closest valid: {iso_label}')
+
     os.makedirs(output, exist_ok=True)
-    cmd = [
-        'gphoto2',
-        '--set-config', f'shutterspeed={ss}',
-        '--set-config', f'iso={iso}',
+    cmd = ['gphoto2', '--set-config', f'shutterspeed={ss}']
+    if iso_str is not None:
+        cmd += ['--set-config', f'iso={iso_str}']
+    cmd += [
         '--capture-image-and-download',
         '--filename', os.path.join(output, f'{prefix}_%n.%C'),
         '--force-overwrite',
@@ -316,6 +391,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
             self._respond(200, {'ok': True})
+        elif self.path == '/speeds':
+            self._respond(200, {'speeds': [t[2] for t in _SHUTTER_SPEEDS]})
+        elif self.path == '/isos':
+            self._respond(200, {'isos': [t[0] for t in _ISO_VALUES]})
         else:
             self._respond(404, {'ok': False, 'error': 'not found'})
 

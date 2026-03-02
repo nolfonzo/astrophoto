@@ -688,24 +688,35 @@ def run_capture(params):
     delay = float(params.get('delay', 0))
     engine = _profile.get('capture_engine', 'auto')
 
-    # Probe camera mode via INDI (used for param resolution and status reporting)
-    log.info('Probing camera mode...')
-    probe = INDIClient(INDI_HOST, INDI_PORT)
-    raw_mode = None
-    try:
-        probe.connect(timeout=15)
-        probe.wait_ready(timeout=20)
-        raw_mode = probe.get_expprogram()
-    except Exception as e:
-        log.warning(f'Mode probe failed: {e}')
-    finally:
+    # For gphoto2 captures (daytime engine, or auto with short exposure) we set
+    # shutter speed directly — no need to probe INDI for camera mode.
+    defaults = current_defaults()
+    requested_exp = float(params.get('exposure', defaults['exposure']))
+    is_gphoto2 = (engine == 'daytime' or
+                  (engine == 'auto' and requested_exp < 1.0))
+
+    if is_gphoto2:
+        raw_mode = 'Manual'   # gphoto2 honours shutter speed regardless of dial
+        mode = 'Manual'
+    else:
+        # INDI Bulb path: probe camera mode (affects param clamping + display)
+        log.info('Probing camera mode...')
+        probe = INDIClient(INDI_HOST, INDI_PORT)
+        raw_mode = None
         try:
-            probe.disconnect_device()
-            probe.close()
-        except Exception:
-            pass
-    mode = normalise_mode(raw_mode)
-    _last_known_mode = mode
+            probe.connect(timeout=15)
+            probe.wait_ready(timeout=20)
+            raw_mode = probe.get_expprogram()
+        except Exception as e:
+            log.warning(f'Mode probe failed: {e}')
+        finally:
+            try:
+                probe.disconnect_device()
+                probe.close()
+            except Exception:
+                pass
+        mode = normalise_mode(raw_mode)
+        _last_known_mode = mode
 
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
@@ -954,6 +965,19 @@ def on_message(client, userdata, msg):
         preview_params.update(payload)
         preview_params['frames'] = 1   # always single frame
         threading.Thread(target=run_capture, args=(preview_params,), daemon=True).start()
+
+    elif topic in ('query/exposures', 'query/isos'):
+        path = '/speeds' if topic == 'query/exposures' else '/isos'
+        event = 'event/exposures' if topic == 'query/exposures' else 'event/isos'
+        def _fetch(path=path, event=event):
+            import urllib.request as _urllib
+            try:
+                url = f'http://{INDI_HOST}:{CAPTURE_SERVICE_PORT}{path}'
+                with _urllib.urlopen(url, timeout=5) as r:
+                    pub(event, json.loads(r.read()))
+            except Exception as e:
+                pub('event/error', {'message': f'Could not fetch {path}: {e}'})
+        threading.Thread(target=_fetch, daemon=True).start()
 
     elif topic == 'query/battery':
         def _battery_query():
