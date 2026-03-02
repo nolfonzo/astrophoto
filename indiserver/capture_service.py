@@ -36,7 +36,9 @@ INDI_HOST   = 'localhost'
 INDI_PORT   = int(os.environ.get('INDI_PORT', '7624'))
 CAMERA_DEV  = os.environ.get('CAMERA_DEVICE', 'GPhoto CCD')
 SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
-AUTO_THRESHOLD = 1.0   # seconds: below → gphoto2 discrete; at/above → INDI Bulb
+# Sony a6400 gphoto2 discrete speeds go up to 30s and are reliable.
+# INDI Bulb via PTP is unreliable on Sony (shutter timing not respected).
+# Only use INDI Bulb when explicitly requested via engine='star'.
 
 _DEFAULT_SENSOR = {'max_x': 6000, 'max_y': 4000, 'pixel_um': 3.91, 'bits': 14}
 
@@ -373,6 +375,74 @@ def _capture_indi_bulb(exposure, iso, prefix, output, sensor):
     return candidates[0]
 
 
+# ── gphoto2 timed bulb (star engine, any duration) ───────────────────────────
+
+def _capture_gphoto2_bulb(exposure, iso, prefix, output):
+    """Timed bulb exposure using gphoto2 --bulb=N.
+
+    A single gphoto2 process holds the PTP connection open for the full
+    duration — open shutter, wait N seconds, close shutter, download.
+
+    Requires the camera dial to be in Manual mode.  gphoto2 will set the
+    shutter speed to 'bulb' automatically via --set-config.
+
+    Any ISO in the discrete list is valid; exposure duration is arbitrary.
+    """
+    iso_str = None
+    if iso is not None:
+        matched_i, iso_str, iso_label = _resolve_iso(iso)
+        if not matched_i:
+            raise ValueError(f'invalid ISO {iso} (closest: {iso_label})')
+
+    os.makedirs(output, exist_ok=True)
+    seconds = max(1, int(round(exposure)))
+
+    cmd = ['gphoto2',
+           '--set-config', 'shutterspeed=bulb']
+    if iso_str:
+        cmd += ['--set-config', f'iso={iso_str}']
+    cmd += [f'--bulb={seconds}',
+            '--filename', os.path.join(output, f'{prefix}_%n.%C'),
+            '--force-overwrite']
+
+    log.info(f'gphoto2 bulb: {seconds}s iso={iso}')
+    t0 = time.time()
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60)
+    if r.returncode != 0:
+        raise RuntimeError(f'gphoto2 bulb failed: {r.stderr.strip()}')
+    log.info(f'gphoto2 bulb done in {time.time()-t0:.1f}s')
+
+    candidates = sorted(glob.glob(os.path.join(output, f'{prefix}_*')),
+                        key=os.path.getmtime, reverse=True)
+    if not candidates:
+        raise RuntimeError('gphoto2 bulb: no output file found')
+    jpegs = [f for f in candidates if f.lower().endswith(('.jpg', '.jpeg'))]
+    return jpegs[0] if jpegs else candidates[0]
+
+
+# ── Preview extraction ────────────────────────────────────────────────────────
+
+def _extract_preview(raw_path):
+    """Extract embedded JPEG preview from a RAW file using exiftool.
+    Sony ARW files always contain a full-res embedded JPEG preview.
+    Returns preview_path on success, None on failure.
+    """
+    preview_path = os.path.splitext(raw_path)[0] + '_preview.jpg'
+    try:
+        r = subprocess.run(
+            ['exiftool', '-b', '-PreviewImage', raw_path],
+            capture_output=True, timeout=15
+        )
+        if r.returncode == 0 and r.stdout:
+            with open(preview_path, 'wb') as f:
+                f.write(r.stdout)
+            log.info(f'Preview extracted: {preview_path} ({len(r.stdout)//1024}kB)')
+            return preview_path
+    except Exception as e:
+        log.warning(f'Preview extraction failed: {e}')
+    return None
+
+
 # ── HTTP handler ──────────────────────────────────────────────────────────────
 
 def _do_capture(data):
@@ -380,13 +450,11 @@ def _do_capture(data):
     iso      = int(data['iso'])
     prefix   = data['prefix']
     output   = data.get('output', '/shots')
-    engine   = data.get('engine', 'auto')
-    sensor   = {**_DEFAULT_SENSOR, **data.get('sensor', {})}
 
-    if engine == 'daytime' or (engine == 'auto' and exposure < AUTO_THRESHOLD):
-        return _capture_gphoto2(exposure, iso, prefix, output)
+    if exposure > 30.0:
+        return _capture_gphoto2_bulb(exposure, iso, prefix, output)
     else:
-        return _capture_indi_bulb(exposure, iso, prefix, output, sensor)
+        return _capture_gphoto2(exposure, iso, prefix, output)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -418,7 +486,10 @@ class _Handler(BaseHTTPRequestHandler):
         with _lock:
             try:
                 file_path = _do_capture(data)
-                self._respond(200, {'ok': True, 'file': file_path})
+                preview_path = None
+                if file_path and not file_path.lower().endswith(('.jpg', '.jpeg')):
+                    preview_path = _extract_preview(file_path)
+                self._respond(200, {'ok': True, 'file': file_path, 'preview': preview_path})
             except Exception as e:
                 log.error(f'Capture error: {e}')
                 self._respond(200, {'ok': False, 'error': str(e)})

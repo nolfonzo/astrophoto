@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y software-properties-common \
     libgphoto2-dev \
     python3 \
     udev \
+    libimage-exiftool-perl \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # INDI server + capture service ports

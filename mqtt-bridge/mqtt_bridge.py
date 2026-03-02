@@ -50,13 +50,14 @@ CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
 # ---- Camera profiles ----
 
 CAMERA_PROFILES = {
-    # min/max_exposure: 1/32000s (electronic shutter) to 30s (PTP limit)
+    # min/max_exposure: 1/32000s (electronic shutter) to 3600s (bulb via star engine)
+    # daytime engine is limited to 30s discrete; star engine uses gphoto2 --bulb
     # min/max_iso: standard range; extended (50, 51200+) requires camera menu
     'a6400': {'max_x': 6000, 'max_y': 4000, 'pixel_um': 3.91, 'bits': 14,
-              'min_exposure': 1/32000, 'max_exposure': 30,
+              'min_exposure': 1/32000, 'max_exposure': 3600,
               'min_iso': 100, 'max_iso': 32000},
     'a6700': {'max_x': 6192, 'max_y': 4128, 'pixel_um': 3.76, 'bits': 14,
-              'min_exposure': 1/32000, 'max_exposure': 30,
+              'min_exposure': 1/32000, 'max_exposure': 3600,
               'min_iso': 100, 'max_iso': 32000},
 }
 
@@ -615,8 +616,36 @@ _capture_lock = threading.Lock()
 _mqtt_client = None
 _last_preview_path = None
 _last_fits_path = None
+_last_raw_path = None     # ARW or other non-FITS raw formats
 _last_hq_jpeg_path = None
 _last_known_mode = None
+
+
+SHOTS_KEEP = int(os.environ.get('SHOTS_KEEP', '200'))
+
+
+def _prune_shots(shots_dir='/shots'):
+    """Delete oldest raw files (and their sidecar previews) beyond SHOTS_KEEP."""
+    import glob as _glob
+    raws = []
+    for pat in ('*.ARW', '*.arw', '*.fits', '*.fit', '*.FITS'):
+        raws.extend(_glob.glob(os.path.join(shots_dir, pat)))
+    # exclude any _preview sidecar that got a weird extension
+    raws = [f for f in raws if '_preview' not in os.path.basename(f)]
+    if len(raws) <= SHOTS_KEEP:
+        return
+    raws.sort(key=os.path.getmtime)
+    to_delete = raws[:len(raws) - SHOTS_KEEP]
+    deleted = 0
+    for raw in to_delete:
+        base = os.path.splitext(raw)[0]
+        for path in [raw] + _glob.glob(base + '_*.jpg') + _glob.glob(base + '_*.jpeg'):
+            try:
+                os.remove(path)
+                deleted += 1
+            except Exception as e:
+                log.warning(f'Prune: could not delete {path}: {e}')
+    log.info(f'Pruned {len(to_delete)} raw(s) ({deleted} files total); keeping {SHOTS_KEEP}')
 
 
 def find_frame_by_id(frame_id, shots_dir='/shots'):
@@ -656,20 +685,14 @@ def pub(subtopic, payload):
         _mqtt_client.publish(f'{MQTT_PREFIX}/{subtopic}', json.dumps(payload))
 
 
-def capture_one_frame(output, prefix, iso, exposure, engine='auto'):
+def capture_one_frame(output, prefix, iso, exposure):
     """Delegate capture to the indiserver capture service. Returns (ok, file_path)."""
     import urllib.request as _urllib
-    cfg = current_camera_cfg()
     payload = json.dumps({
         'exposure': exposure,
         'iso': iso,
         'prefix': prefix,
         'output': output,
-        'engine': engine,
-        'sensor': {
-            'max_x': cfg['max_x'], 'max_y': cfg['max_y'],
-            'pixel_um': cfg['pixel_um'], 'bits': cfg['bits'],
-        },
     }).encode()
     url = f'http://{INDI_HOST}:{CAPTURE_SERVICE_PORT}/capture'
     req = _urllib.Request(url, data=payload, headers={'Content-Type': 'application/json'})
@@ -678,56 +701,29 @@ def capture_one_frame(output, prefix, iso, exposure, engine='auto'):
             result = json.loads(resp.read())
     except Exception as e:
         log.error(f'Capture service error: {e}')
-        return False, None
-    return result.get('ok', False), result.get('file')
+        return False, None, None
+    return result.get('ok', False), result.get('file'), result.get('preview')
 
 
 def run_capture(params):
-    global _capturing, _last_preview_path, _last_fits_path, _last_hq_jpeg_path, _last_known_mode
+    global _capturing, _last_preview_path, _last_fits_path, _last_raw_path, _last_hq_jpeg_path, _last_known_mode
 
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
     delay = float(params.get('delay', 0))
-    engine = _profile.get('capture_engine', 'auto')
-
-    # For gphoto2 captures (daytime engine, or auto with short exposure) we set
-    # shutter speed directly — no need to probe INDI for camera mode.
+    # gphoto2 handles the method automatically: discrete ≤ 30s, bulb > 30s.
     defaults = current_defaults()
-    requested_exp = float(params.get('exposure', defaults['exposure']))
-    is_gphoto2 = (engine == 'daytime' or
-                  (engine == 'auto' and requested_exp < 1.0))
-
-    if is_gphoto2:
-        raw_mode = 'Manual'   # gphoto2 honours shutter speed regardless of dial
-        mode = 'Manual'
-    else:
-        # INDI Bulb path: probe camera mode (affects param clamping + display)
-        log.info('Probing camera mode...')
-        probe = INDIClient(INDI_HOST, INDI_PORT)
-        raw_mode = None
-        try:
-            probe.connect(timeout=15)
-            probe.wait_ready(timeout=20)
-            raw_mode = probe.get_expprogram()
-        except Exception as e:
-            log.warning(f'Mode probe failed: {e}')
-        finally:
-            try:
-                probe.disconnect_device()
-                probe.close()
-            except Exception:
-                pass
-        mode = normalise_mode(raw_mode)
-        _last_known_mode = mode
+    raw_mode = 'Manual'
+    mode = 'Manual'
 
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
 
-    log.info(f'Capture: engine={engine} {frames}x mode={mode} exp={exposure}s iso={iso} ignored={ignored} -> {output}')
+    log.info(f'Capture: {frames}x exp={exposure}s iso={iso} ignored={ignored} -> {output}')
 
     pub('status', {
         'state': 'capturing', 'frame': 0, 'total': frames,
-        'camera': camera, 'mode': mode, 'engine': engine,
+        'camera': camera, 'mode': mode,
         'exposure': exposure, 'iso': iso,
     })
 
@@ -764,7 +760,7 @@ def run_capture(params):
             prefix = f'frame_{session_ts}_{i:04d}'
             frame_start = time.time()
             try:
-                ok, frame_path = capture_one_frame(output, prefix, iso, exposure, engine)
+                ok, frame_path, preview_path = capture_one_frame(output, prefix, iso, exposure)
             except Exception as e:
                 log.error(f'Frame {i} error: {e}')
                 pub('event/error', {'message': str(e)})
@@ -776,7 +772,7 @@ def run_capture(params):
                 log.warning(f'Frame {i}: capture failed, retrying in 3s...')
                 time.sleep(3)
                 try:
-                    ok, frame_path = capture_one_frame(output, prefix, iso, exposure, engine)
+                    ok, frame_path, preview_path = capture_one_frame(output, prefix, iso, exposure)
                 except Exception as e:
                     log.error(f'Frame {i} retry error: {e}')
                     pub('event/error', {'message': str(e)})
@@ -801,8 +797,12 @@ def run_capture(params):
                     _last_fits_path = frame_file
                     jpeg_path, hq_path = extract_jpeg_previews(frame_file)
                     _last_hq_jpeg_path = hq_path
-                else:
-                    jpeg_path = frame_file  # already a JPEG
+                elif preview_path and os.path.exists(preview_path):
+                    # RAW file (ARW etc.) — track raw for archive, use preview for Telegram
+                    _last_raw_path = frame_file
+                    jpeg_path = preview_path
+                elif frame_file.lower().endswith(('.jpg', '.jpeg')):
+                    jpeg_path = frame_file
                 if jpeg_path:
                     _last_preview_path = jpeg_path
                     pub('event/preview', {'path': jpeg_path, 'id': frame_id})
@@ -823,6 +823,7 @@ def run_capture(params):
                                'exposure': exposure, 'iso': iso, 'id': frame_id})
         pub('status', {'state': 'idle', 'camera': camera})
         log.info('Session complete')
+        _prune_shots(output)
     finally:
         with _capture_lock:
             _capturing = False
@@ -877,25 +878,12 @@ def on_message(client, userdata, msg):
         log.info(f'Defaults updated: {defaults}')
         pub('event/defaults', defaults)
 
-    elif topic == 'command/engine':
-        engine = payload.get('engine', '').lower()
-        if engine not in ('auto', 'star', 'daytime'):
-            pub('event/error', {
-                'message': f'Unknown engine: {engine}. Use: auto, star, daytime'
-            })
-            return
-        _profile['capture_engine'] = engine
-        save_profile()
-        log.info(f'Capture engine set to: {engine}')
-        pub('event/info', {'message': f'Capture engine: {engine}'})
-
     elif topic == 'query/status':
         camera = _profile.get('camera', 'unknown')
         pub('status', {
             'state': 'capturing' if _capturing else 'idle',
             'camera': camera,
             'mode': _last_known_mode,
-            'engine': _profile.get('capture_engine', 'auto'),
             'defaults': current_defaults(),
             'last_preview': _last_preview_path,
         })
@@ -916,13 +904,17 @@ def on_message(client, userdata, msg):
     elif topic == 'query/archive':
         frame_id = (payload.get('id') or 'last').lstrip('#')
         if frame_id == 'last':
-            path = _last_fits_path or _last_preview_path
+            path = _last_raw_path or _last_fits_path or _last_preview_path
             if not path:
-                # Bridge restarted — find most recent FITS on disk
+                # Bridge restarted — find most recent raw file on disk
                 import glob as _glob
-                fits = _glob.glob('/shots/*.fits') + _glob.glob('/shots/*.fit')
-                if fits:
-                    path = max(fits, key=os.path.getmtime)
+                candidates = (
+                    _glob.glob('/shots/*.ARW') + _glob.glob('/shots/*.arw') +
+                    _glob.glob('/shots/*.fits') + _glob.glob('/shots/*.fit')
+                )
+                candidates = [f for f in candidates if '_preview' not in f]
+                if candidates:
+                    path = max(candidates, key=os.path.getmtime)
         else:
             path = find_frame_by_id(frame_id)
             if not path:
@@ -935,10 +927,12 @@ def on_message(client, userdata, msg):
                 'size_mb': round(os.path.getsize(path) / 1048576, 1),
                 'id': frame_id,
             }
-            hq = os.path.splitext(path)[0] + '_hq.jpg'
-            if os.path.exists(hq):
-                payload['hq_filename'] = os.path.basename(hq)
-                payload['hq_size_mb'] = round(os.path.getsize(hq) / 1048576, 1)
+            # Include a preview JPEG if one exists alongside the raw file
+            base = os.path.splitext(path)[0]
+            for suffix in ('_preview.jpg', '_hq.jpg'):
+                if os.path.exists(base + suffix):
+                    payload['preview'] = base + suffix
+                    break
             pub('event/archive', payload)
         else:
             pub('event/error', {'message': 'No image to archive'})
