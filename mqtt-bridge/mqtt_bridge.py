@@ -613,6 +613,7 @@ _mqtt_client = None
 _last_preview_path = None
 _last_fits_path = None
 _last_hq_jpeg_path = None
+_last_known_mode = None
 
 
 def find_frame_by_id(frame_id, shots_dir='/shots'):
@@ -699,6 +700,8 @@ def run_capture(params):
             pass
 
     mode = normalise_mode(raw_mode)
+    global _last_known_mode
+    _last_known_mode = mode
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
 
@@ -862,6 +865,7 @@ def on_message(client, userdata, msg):
         pub('status', {
             'state': 'capturing' if _capturing else 'idle',
             'camera': camera,
+            'mode': _last_known_mode,
             'defaults': current_defaults(),
             'last_preview': _last_preview_path,
         })
@@ -941,6 +945,8 @@ def on_message(client, userdata, msg):
                 indi.connect(timeout=15)
                 indi.wait_ready(timeout=20)
                 level = indi.get_battery()
+                global _last_known_mode
+                _last_known_mode = normalise_mode(indi.get_expprogram())
                 pub('event/battery', {'level': level or 'unknown'})
             except Exception as e:
                 pub('event/error', {'message': f'Battery query failed: {e}'})
