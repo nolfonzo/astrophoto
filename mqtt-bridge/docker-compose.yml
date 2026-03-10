@@ -1,0 +1,54 @@
+services:
+  indiserver:
+    build: ./indiserver
+    container_name: indiserver
+    restart: unless-stopped
+    privileged: true          # needed for USB device access
+    network_mode: host        # INDI clients connect on port 7624
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ./config:/config
+      - ./shots:/shots
+    environment:
+      - TZ=${TZ:-UTC}
+
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: astrophoto-mosquitto
+    restart: unless-stopped
+    network_mode: host        # clients connect on port 1883
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  mqtt-bridge:
+    build: ./mqtt-bridge
+    container_name: astrophoto-mqtt
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./shots:/shots
+      - ./config:/config      # profile.json persists here
+    environment:
+      - MQTT_HOST=localhost
+      - MQTT_PORT=1883
+      - MQTT_PREFIX=${MQTT_PREFIX:-astrophoto}
+      - INDI_HOST=localhost
+      - INDI_PORT=7624
+      - CAMERA_DEVICE=GPhoto CCD
+      - SHOTS_KEEP=${SHOTS_KEEP:-200}
+      - TZ=${TZ:-UTC}
+    depends_on:
+      - indiserver
+      - mosquitto
+
+  fileserver:
+    build: ./nginx
+    container_name: astrophoto-files
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./shots:/usr/share/nginx/html:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - TZ=${TZ:-UTC}
