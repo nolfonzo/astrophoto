@@ -28,6 +28,7 @@ services:
     volumes:
       - ./shots:/shots
       - ./config:/config      # profile.json persists here
+      - ./mqtt-bridge/mqtt_bridge.py:/mqtt_bridge.py:ro
     environment:
       - MQTT_HOST=localhost
       - MQTT_PORT=1883
