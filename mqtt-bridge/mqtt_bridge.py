@@ -10,6 +10,15 @@ Command topics  (n150 → Pi 4):
   astrophoto/command/profile   {"camera": "a6400"}
   astrophoto/command/defaults  {"frames": 1, "exposure": 0.01, "iso": 400}
   astrophoto/command/delete    {"files": ["frame_...ARW"]} | {"session": "YYYYMMDD"} | {"all": true}
+  astrophoto/command/camera    {"camera": "a6400"}
+  astrophoto/command/defaults/load
+  astrophoto/command/profile/set  {"frames": 5, "exposure": 60, "iso": 3200}
+  astrophoto/command/preset/save  {"name": "deep-sky"}
+  astrophoto/command/preset/load  {"name": "deep-sky"}
+  astrophoto/command/preset/delete {"name": "deep-sky"}
+  astrophoto/query/camera
+  astrophoto/query/profile
+  astrophoto/query/presets
   astrophoto/query/status
 
 Status topics  (Pi 4 → n150):
@@ -45,7 +54,8 @@ MQTT_PREFIX = os.environ.get('MQTT_PREFIX', 'astrophoto')
 INDI_HOST   = os.environ.get('INDI_HOST', 'localhost')
 INDI_PORT   = int(os.environ.get('INDI_PORT', '7624'))
 CAMERA_DEV  = os.environ.get('CAMERA_DEVICE', 'GPhoto CCD')
-PROFILE_FILE = os.environ.get('PROFILE_FILE', '/config/profile.json')
+PROFILE_FILE  = os.environ.get('PROFILE_FILE',  '/config/profile.json')
+PRESETS_FILE  = os.environ.get('PRESETS_FILE',  '/config/presets.json')
 CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
 
 # ---- Camera profiles ----
@@ -64,30 +74,44 @@ CAMERA_PROFILES = {
 
 _PROFILE_DEFAULTS = {
     'camera': 'a6400',
-    'defaults': {'frames': 1, 'exposure': 0.01, 'iso': 400},
+    'camera_defaults': {
+        'a6400': {'frames': 1, 'exposure': 0.01, 'iso': 400},
+        'a6700': {'frames': 1, 'exposure': 0.01, 'iso': 400},
+    },
 }
 
 _profile = {}
+_current_profile = {'frames': 1, 'exposure': 0.01, 'iso': 400}  # in-memory, not persisted
 
 
 def load_profile():
-    global _profile
+    global _profile, _current_profile
     try:
         with open(PROFILE_FILE) as f:
-            _profile = json.load(f)
-        log.info(f'Profile loaded: camera={_profile.get("camera")} defaults={_profile.get("defaults")}')
+            data = json.load(f)
+        # Migrate old 'defaults' key to 'camera_defaults' structure
+        if 'defaults' in data and 'camera_defaults' not in data:
+            camera = data.get('camera', _PROFILE_DEFAULTS['camera'])
+            data['camera_defaults'] = {camera: data.pop('defaults')}
+            log.info('Migrated profile: defaults -> camera_defaults')
+        _profile = data
+        log.info(f'Profile loaded: camera={_profile.get("camera")}')
     except FileNotFoundError:
         _profile = {
             'camera': _PROFILE_DEFAULTS['camera'],
-            'defaults': dict(_PROFILE_DEFAULTS['defaults']),
+            'camera_defaults': dict(_PROFILE_DEFAULTS['camera_defaults']),
         }
         log.info('No profile file found, using defaults')
     except Exception as e:
         log.error(f'Profile load error: {e}, using defaults')
         _profile = {
             'camera': _PROFILE_DEFAULTS['camera'],
-            'defaults': dict(_PROFILE_DEFAULTS['defaults']),
+            'camera_defaults': dict(_PROFILE_DEFAULTS['camera_defaults']),
         }
+    # Initialise current profile from camera defaults
+    _current_profile.clear()
+    _current_profile.update(current_camera_defaults())
+    log.info(f'Active profile: {_current_profile}')
 
 
 def save_profile():
@@ -99,12 +123,38 @@ def save_profile():
         log.error(f'Profile save error: {e}')
 
 
+def load_presets():
+    try:
+        with open(PRESETS_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.error(f'Presets load error: {e}')
+        return {}
+
+
+def save_presets(presets):
+    try:
+        os.makedirs(os.path.dirname(PRESETS_FILE), exist_ok=True)
+        with open(PRESETS_FILE, 'w') as f:
+            json.dump(presets, f, indent=2)
+    except Exception as e:
+        log.error(f'Presets save error: {e}')
+
+
 def current_camera_cfg():
     return CAMERA_PROFILES.get(_profile.get('camera', 'a6400'), CAMERA_PROFILES['a6400'])
 
 
+def current_camera_defaults():
+    camera = _profile.get('camera', _PROFILE_DEFAULTS['camera'])
+    fallback = _PROFILE_DEFAULTS['camera_defaults'].get(camera, {'frames': 1, 'exposure': 0.01, 'iso': 400})
+    return dict(_profile.get('camera_defaults', {}).get(camera, fallback))
+
+
 def current_defaults():
-    return _profile.get('defaults', dict(_PROFILE_DEFAULTS['defaults']))
+    return dict(_current_profile)
 
 
 # ---- Mode helpers ----
@@ -730,7 +780,7 @@ def run_capture(params):
     delay_start = float(params.get('delay_start', 0))
     delay = float(params.get('delay', 0))
     # gphoto2 handles the method automatically: discrete ≤ 30s, bulb > 30s.
-    defaults = current_defaults()
+    defaults = dict(_current_profile)  # active profile drives capture
     raw_mode = 'Manual'
     mode = 'Manual'
 
@@ -872,7 +922,7 @@ def on_message(client, userdata, msg):
             _capturing = False
         log.info('Abort signalled')
 
-    elif topic == 'command/profile':
+    elif topic in ('command/camera', 'command/profile'):
         camera = payload.get('camera', '').lower()
         if camera not in CAMERA_PROFILES:
             pub('event/error', {
@@ -880,21 +930,50 @@ def on_message(client, userdata, msg):
             })
             return
         _profile['camera'] = camera
+        cam_defs = current_camera_defaults()
+        _current_profile.clear()
+        _current_profile.update(cam_defs)
         save_profile()
-        log.info(f'Profile set: camera={camera}')
-        pub('event/profile', {'camera': camera, **CAMERA_PROFILES[camera]})
-        pub('status', {'state': 'capturing' if _capturing else 'idle',
-                       'camera': camera})
+        log.info(f'Camera set: {camera}, profile reset: {_current_profile}')
+        cfg = CAMERA_PROFILES[camera]
+        pub('event/camera', {
+            'camera': camera,
+            'min_exposure': cfg['min_exposure'], 'max_exposure': cfg['max_exposure'],
+            'min_iso': cfg['min_iso'], 'max_iso': cfg['max_iso'],
+            'resolution': f"{cfg['max_x']}\u00d7{cfg['max_y']}",
+            'pixel_um': cfg['pixel_um'], 'bits': cfg['bits'],
+            'camera_defaults': cam_defs,
+            'profile': dict(_current_profile),
+        })
+        pub('status', {'state': 'capturing' if _capturing else 'idle', 'camera': camera})
 
-    elif topic == 'command/defaults':
-        defaults = _profile.get('defaults', dict(_PROFILE_DEFAULTS['defaults']))
+    elif topic in ('command/defaults', 'command/defaults/set'):
+        camera = _profile.get('camera', _PROFILE_DEFAULTS['camera'])
+        cam_defs = current_camera_defaults()
         for key in ('frames', 'exposure', 'iso'):
             if key in payload:
-                defaults[key] = payload[key]
-        _profile['defaults'] = defaults
+                cam_defs[key] = payload[key]
+        if 'camera_defaults' not in _profile:
+            _profile['camera_defaults'] = {}
+        _profile['camera_defaults'][camera] = cam_defs
         save_profile()
-        log.info(f'Defaults updated: {defaults}')
-        pub('event/defaults', defaults)
+        log.info(f'Camera defaults updated for {camera}: {cam_defs}')
+        pub('event/defaults', {'camera': camera, **cam_defs})
+
+    elif topic == 'command/defaults/load':
+        cam_defs = current_camera_defaults()
+        _current_profile.clear()
+        _current_profile.update(cam_defs)
+        camera = _profile.get('camera', 'unknown')
+        log.info(f'Profile reset to {camera} defaults: {_current_profile}')
+        pub('event/profile', {'source': 'defaults', 'camera': camera, **_current_profile})
+
+    elif topic == 'command/profile/set':
+        for key in ('frames', 'exposure', 'iso'):
+            if key in payload:
+                _current_profile[key] = payload[key]
+        log.info(f'Current profile updated: {_current_profile}')
+        pub('event/profile', dict(_current_profile))
 
     elif topic == 'query/status':
         camera = _profile.get('camera', 'unknown')
@@ -902,7 +981,7 @@ def on_message(client, userdata, msg):
             'state': 'capturing' if _capturing else 'idle',
             'camera': camera,
             'mode': _last_known_mode,
-            'defaults': current_defaults(),
+            'profile': dict(_current_profile),
             'last_preview': _last_preview_path,
         })
 
@@ -955,10 +1034,10 @@ def on_message(client, userdata, msg):
         else:
             pub('event/error', {'message': 'No image to archive'})
 
-    elif topic == 'query/limits':
+    elif topic in ('query/camera', 'query/limits'):
         cfg = current_camera_cfg()
         camera = _profile.get('camera', 'unknown')
-        pub('event/limits', {
+        pub('event/camera', {
             'camera': camera,
             'min_exposure': cfg['min_exposure'],
             'max_exposure': cfg['max_exposure'],
@@ -967,7 +1046,48 @@ def on_message(client, userdata, msg):
             'resolution': f"{cfg['max_x']}×{cfg['max_y']}",
             'pixel_um': cfg['pixel_um'],
             'bits': cfg['bits'],
+            'camera_defaults': current_camera_defaults(),
+            'profile': dict(_current_profile),
         })
+
+    elif topic == 'query/profile':
+        pub('event/profile', dict(_current_profile))
+
+    elif topic == 'query/presets':
+        pub('event/presets', {'presets': load_presets()})
+
+    elif topic == 'command/preset/save':
+        name = payload.get('name', '').strip()
+        if not name:
+            pub('event/error', {'message': 'preset/save: name required'})
+            return
+        presets = load_presets()
+        presets[name] = dict(_current_profile)
+        save_presets(presets)
+        log.info(f'Preset saved: {name} = {_current_profile}')
+        pub('event/preset', {'action': 'saved', 'name': name, **_current_profile})
+
+    elif topic == 'command/preset/load':
+        name = payload.get('name', '').strip()
+        presets = load_presets()
+        if name not in presets:
+            pub('event/error', {'message': f'Preset "{name}" not found. Use /astro preset list.'})
+            return
+        _current_profile.clear()
+        _current_profile.update(presets[name])
+        log.info(f'Preset loaded: {name} -> {_current_profile}')
+        pub('event/preset', {'action': 'loaded', 'name': name, **_current_profile})
+
+    elif topic == 'command/preset/delete':
+        name = payload.get('name', '').strip()
+        presets = load_presets()
+        if name not in presets:
+            pub('event/error', {'message': f'Preset "{name}" not found.'})
+            return
+        del presets[name]
+        save_presets(presets)
+        log.info(f'Preset deleted: {name}')
+        pub('event/preset', {'action': 'deleted', 'name': name})
 
     elif topic == 'command/preview':
         with _capture_lock:
