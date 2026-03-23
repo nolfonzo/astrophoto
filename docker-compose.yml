@@ -23,6 +23,7 @@ services:
   mqtt-bridge:
     build: ./mqtt-bridge
     container_name: astrophoto-mqtt
+    user: "1000:1000"
     restart: unless-stopped
     network_mode: host
     volumes:
