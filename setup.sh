@@ -32,6 +32,17 @@ if ! $DOCKER compose version &>/dev/null; then
 fi
 ok "Docker Compose ready."
 
+# ── 2. Hostname
+# ─────────────────────────────────────────────────────────────────────────────
+if [ "$(hostname)" = "raspberrypi" ] || [ "$(hostname)" = "localhost" ]; then
+  read -rp "  Pi hostname (e.g. pi4-black for Chile, pi4-astro-oz for OZ) [raspberrypi]: " HN_INPUT
+  HN_VAL="${HN_INPUT:-raspberrypi}"
+  if [ "$HN_VAL" != "$(hostname)" ]; then
+    sudo hostnamectl set-hostname "$HN_VAL"
+    ok "Hostname set to $HN_VAL (takes effect after reboot)"
+  fi
+fi
+
 # ── 2. .env ───────────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
   info "Creating .env from .env.example..."
