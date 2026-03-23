@@ -1,0 +1,15 @@
+{
+  "camera": "a6400",
+  "camera_defaults": {
+    "a6400": {
+      "frames": 1,
+      "exposure": 0.01,
+      "iso": 400
+    },
+    "a6700": {
+      "frames": 1,
+      "exposure": 0.01,
+      "iso": 400
+    }
+  }
+}
