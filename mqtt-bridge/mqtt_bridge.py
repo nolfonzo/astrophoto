@@ -9,6 +9,7 @@ Command topics  (n150 → Pi 4):
   astrophoto/command/abort
   astrophoto/command/profile   {"camera": "a6400"}
   astrophoto/command/defaults  {"frames": 1, "exposure": 0.01, "iso": 400}
+  astrophoto/command/delete    {"files": ["frame_...ARW"]} | {"session": "YYYYMMDD"} | {"all": true}
   astrophoto/query/status
 
 Status topics  (Pi 4 → n150):
@@ -624,6 +625,23 @@ _last_known_mode = None
 SHOTS_KEEP = int(os.environ.get('SHOTS_KEEP', '200'))
 
 
+def _session_date_of(filename):
+    """Return session date string (YYYYMMDD) for a filename.
+    Sessions run noon-to-noon: captures at/after 12:00 belong to the next calendar day.
+    e.g. 11pm on Mar 23 and 1am on Mar 24 both belong to session '20260324'.
+    """
+    import re as _re
+    from datetime import datetime as _dt, timedelta as _td
+    m = _re.search(r'_(\d{4})(\d{2})(\d{2})_(\d{6})_', filename)
+    if not m:
+        return None
+    yyyy, mm, dd, hhmmss = m.group(1), m.group(2), m.group(3), m.group(4)
+    d = _dt(int(yyyy), int(mm), int(dd))
+    if hhmmss >= '120000':
+        d += _td(days=1)
+    return d.strftime('%Y%m%d')
+
+
 def _prune_shots(shots_dir='/shots'):
     """Delete oldest raw files (and their sidecar previews) beyond SHOTS_KEEP."""
     import glob as _glob
@@ -994,6 +1012,51 @@ def on_message(client, userdata, msg):
                 except Exception:
                     pass
         threading.Thread(target=_battery_query, daemon=True).start()
+
+    elif topic == 'command/delete':
+        import glob as _glob
+        shots_dir = '/shots'
+        files_to_delete = payload.get('files')
+        session = payload.get('session')
+        delete_all = payload.get('all', False)
+
+        if delete_all:
+            candidates = [
+                f for f in _glob.glob(os.path.join(shots_dir, '*'))
+                if os.path.isfile(f)
+            ]
+        elif session:
+            candidates = [
+                f for f in _glob.glob(os.path.join(shots_dir, '*'))
+                if os.path.isfile(f) and _session_date_of(os.path.basename(f)) == session
+            ]
+        elif files_to_delete:
+            candidates = [os.path.join(shots_dir, f) for f in files_to_delete]
+        else:
+            pub('event/error', {'message': 'delete: specify files, session, or all'})
+            return
+
+        deleted = 0
+        for path in candidates:
+            if not os.path.exists(path):
+                continue
+            try:
+                os.remove(path)
+                deleted += 1
+            except Exception as e:
+                log.warning(f'Delete {path}: {e}')
+            # Delete sidecars (_preview.jpg, _hq.jpg)
+            base = os.path.splitext(path)[0]
+            for sidecar in (base + '_preview.jpg', base + '_hq.jpg'):
+                if os.path.exists(sidecar):
+                    try:
+                        os.remove(sidecar)
+                        deleted += 1
+                    except Exception as e:
+                        log.warning(f'Delete sidecar {sidecar}: {e}')
+
+        log.info(f'Deleted {deleted} files from Pi.')
+        pub('event/info', {'message': f'🗑 Deleted {deleted} files from Pi.'})
 
 
 def on_connect(client, userdata, connect_flags, reason_code, properties):
