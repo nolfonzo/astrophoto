@@ -76,7 +76,6 @@ _PROFILE_DEFAULTS = {
     'camera': 'a6400',
     'camera_defaults': {
         'a6400': {'frames': 1, 'exposure': 0.01, 'iso': 400},
-        'a6700': {'frames': 1, 'exposure': 0.01, 'iso': 400},
     },
 }
 
@@ -693,27 +692,40 @@ def _session_date_of(filename):
 
 
 def _prune_shots(shots_dir='/shots'):
-    """Delete oldest raw files (and their sidecar previews) beyond SHOTS_KEEP."""
+    """Delete whole old sessions beyond SHOTS_KEEP — never prune the most recent session."""
     import glob as _glob
+    from collections import defaultdict
     raws = []
     for pat in ('*.ARW', '*.arw', '*.fits', '*.fit', '*.FITS'):
         raws.extend(_glob.glob(os.path.join(shots_dir, pat)))
-    # exclude any _preview sidecar that got a weird extension
     raws = [f for f in raws if '_preview' not in os.path.basename(f)]
     if len(raws) <= SHOTS_KEEP:
         return
-    raws.sort(key=os.path.getmtime)
-    to_delete = raws[:len(raws) - SHOTS_KEEP]
+    # Group by session date; never delete the most recent session
+    sessions = defaultdict(list)
+    for f in raws:
+        s = _session_date_of(os.path.basename(f)) or 'unknown'
+        sessions[s].append(f)
+    sorted_sessions = sorted(sessions.keys())
+    if len(sorted_sessions) <= 1:
+        log.info(f'Prune: {len(raws)} raws exceed SHOTS_KEEP={SHOTS_KEEP} but only one session — skipping')
+        return
+    remaining = len(raws)
     deleted = 0
-    for raw in to_delete:
-        base = os.path.splitext(raw)[0]
-        for path in [raw] + _glob.glob(base + '_*.jpg') + _glob.glob(base + '_*.jpeg'):
-            try:
-                os.remove(path)
-                deleted += 1
-            except Exception as e:
-                log.warning(f'Prune: could not delete {path}: {e}')
-    log.info(f'Pruned {len(to_delete)} raw(s) ({deleted} files total); keeping {SHOTS_KEEP}')
+    for session in sorted_sessions[:-1]:   # never touch the most recent session
+        if remaining <= SHOTS_KEEP:
+            break
+        for raw in sessions[session]:
+            base = os.path.splitext(raw)[0]
+            for path in [raw] + _glob.glob(base + '_*.jpg') + _glob.glob(base + '_*.jpeg') + _glob.glob(base + '.json'):
+                try:
+                    os.remove(path)
+                    deleted += 1
+                except Exception as e:
+                    log.warning(f'Prune: could not delete {path}: {e}')
+            remaining -= 1
+        log.info(f'Pruned session {session} ({len(sessions[session])} raws)')
+    log.info(f'Prune complete: {deleted} files removed, {remaining} raws remaining')
 
 
 def find_frame_by_id(frame_id, shots_dir='/shots'):
@@ -786,6 +798,12 @@ def run_capture(params):
 
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
+
+    if frames <= 0:
+        pub('event/error', {'message': f'frames must be > 0 (got {frames})'})
+        with _capture_lock:
+            _capturing = False
+        return
 
     log.info(f'Capture: {frames}x exp={exposure}s iso={iso} ignored={ignored} -> {output}')
 
@@ -875,6 +893,23 @@ def run_capture(params):
                     _last_preview_path = jpeg_path
                     pub('event/preview', {'path': jpeg_path, 'id': frame_id})
 
+                # Write JSON metadata sidecar alongside the raw frame
+                sidecar_path = os.path.splitext(frame_file)[0] + '.json'
+                try:
+                    sidecar = {
+                        'camera': camera,
+                        'exposure': exposure,
+                        'iso': iso,
+                        'frame': i,
+                        'frames_total': frames,
+                        'session': session_ts,
+                        'captured_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                    }
+                    with open(sidecar_path, 'w') as _sf:
+                        json.dump(sidecar, _sf, indent=2)
+                except Exception as _se:
+                    log.warning(f'Sidecar write failed for {frame_file}: {_se}')
+
             pub('event/frame', {'frame': i, 'total': frames, 'id': frame_id})
 
             # --- Inter-frame delay ---
@@ -888,7 +923,8 @@ def run_capture(params):
                     return
 
         pub('event/complete', {'frames': frames, 'camera': camera, 'mode': mode,
-                               'exposure': exposure, 'iso': iso, 'id': frame_id})
+                               'exposure': exposure, 'iso': iso, 'id': frame_id,
+                               'profile': dict(_current_profile)})
         pub('status', {'state': 'idle', 'camera': camera})
         log.info('Session complete')
         _prune_shots(output)
