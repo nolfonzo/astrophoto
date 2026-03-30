@@ -834,6 +834,10 @@ def run_capture(params):
     os.makedirs(output, exist_ok=True)
     session_ts = time.strftime('%Y%m%d_%H%M%S')
 
+    # Publish run ID for timelapse so user can reference it for rendering
+    if interval > 0:
+        pub('event/info', {'message': f'Timelapse run ID: {session_ts} \u00b7 {frames} frames \u00b7 {interval:.0f}s interval'})
+
     # --- Delayed start ---
     if delay_start > 0:
         pub('event/info', {'message': f'Starting in {delay_start:.0f}s\u2026'})
@@ -951,9 +955,13 @@ def run_capture(params):
                         pub('status', {'state': 'idle', 'camera': camera})
                         return
 
-        pub('event/complete', {'frames': frames, 'camera': camera, 'mode': mode,
-                               'exposure': exposure, 'iso': iso, 'id': frame_id,
-                               'profile': dict(_current_profile)})
+        complete_payload = {'frames': frames, 'camera': camera, 'mode': mode,
+                            'exposure': exposure, 'iso': iso, 'id': frame_id,
+                            'profile': dict(_current_profile)}
+        if interval > 0:
+            complete_payload['run_id'] = session_ts
+            complete_payload['interval'] = interval
+        pub('event/complete', complete_payload)
         pub('status', {'state': 'idle', 'camera': camera})
         log.info('Session complete')
         _prune_shots(output)
