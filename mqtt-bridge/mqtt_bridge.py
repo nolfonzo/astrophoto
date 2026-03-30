@@ -6,6 +6,10 @@ Subscribes to MQTT commands and controls the camera via the INDI protocol.
 
 Command topics  (n150 → Pi 4):
   astrophoto/command/capture   {"frames": 5, "exposure": 90, "iso": 3200}
+  astrophoto/command/timelapse {"frames": 120, "exposure": 15, "iso": 1600, "interval": 30}
+                               {"duration": 7200, "exposure": 15, "iso": 1600, "interval": 30}
+                               interval = seconds between frame starts (exposure + gap = interval)
+                               duration = total duration in seconds (auto-computes frames)
   astrophoto/command/abort
   astrophoto/command/profile   {"camera": "a6400"}
   astrophoto/command/defaults  {"frames": 1, "exposure": 0.01, "iso": 400}
@@ -791,10 +795,19 @@ def run_capture(params):
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
     delay = float(params.get('delay', 0))
+    interval = float(params.get('interval', 0))  # seconds between frame starts (timelapse)
     # gphoto2 handles the method automatically: discrete ≤ 30s, bulb > 30s.
     defaults = dict(_current_profile)  # active profile drives capture
     raw_mode = 'Manual'
     mode = 'Manual'
+
+    # Timelapse: if duration given instead of frames, compute frame count
+    if interval > 0 and 'duration' in params and 'frames' not in params:
+        import math
+        duration_s = float(params['duration'])
+        params = dict(params)
+        params['frames'] = math.ceil(duration_s / interval)
+        log.info(f'Timelapse: duration={duration_s}s interval={interval}s -> {params["frames"]} frames')
 
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
@@ -905,6 +918,9 @@ def run_capture(params):
                         'session': session_ts,
                         'captured_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                     }
+                    if interval > 0:
+                        sidecar['interval'] = interval
+                        sidecar['mode'] = 'timelapse'
                     with open(sidecar_path, 'w') as _sf:
                         json.dump(sidecar, _sf, indent=2)
                 except Exception as _se:
@@ -913,14 +929,27 @@ def run_capture(params):
             pub('event/frame', {'frame': i, 'total': frames, 'id': frame_id})
 
             # --- Inter-frame delay ---
-            if delay > 0 and i < frames:
-                pub('event/info', {'message': f'Frame {i}/{frames} done \u00b7 next in {delay:.0f}s'})
-                pub('status', {'state': 'waiting', 'camera': camera, 'mode': mode,
-                               'frame': i, 'total': frames})
-                if not abortable_sleep(delay):
-                    pub('event/aborted', {'frame': i, 'total': frames})
-                    pub('status', {'state': 'idle', 'camera': camera})
-                    return
+            if i < frames:
+                if interval > 0:
+                    # Timelapse mode: fixed frame-start-to-frame-start interval
+                    elapsed = time.time() - frame_start
+                    gap = max(0.0, interval - elapsed)
+                    if gap > 0:
+                        pub('event/info', {'message': f'Frame {i}/{frames} done \u00b7 next in {gap:.0f}s'})
+                        pub('status', {'state': 'waiting', 'camera': camera, 'mode': mode,
+                                       'frame': i, 'total': frames, 'interval': interval})
+                        if not abortable_sleep(gap):
+                            pub('event/aborted', {'frame': i, 'total': frames})
+                            pub('status', {'state': 'idle', 'camera': camera})
+                            return
+                elif delay > 0:
+                    pub('event/info', {'message': f'Frame {i}/{frames} done \u00b7 next in {delay:.0f}s'})
+                    pub('status', {'state': 'waiting', 'camera': camera, 'mode': mode,
+                                   'frame': i, 'total': frames})
+                    if not abortable_sleep(delay):
+                        pub('event/aborted', {'frame': i, 'total': frames})
+                        pub('status', {'state': 'idle', 'camera': camera})
+                        return
 
         pub('event/complete', {'frames': frames, 'camera': camera, 'mode': mode,
                                'exposure': exposure, 'iso': iso, 'id': frame_id,
@@ -945,7 +974,7 @@ def on_message(client, userdata, msg):
 
     log.info(f'<- {topic}: {payload}')
 
-    if topic == 'command/capture':
+    if topic in ('command/capture', 'command/timelapse'):
         with _capture_lock:
             if _capturing:
                 pub('event/error', {'message': 'Already capturing'})
