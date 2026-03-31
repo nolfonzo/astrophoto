@@ -812,6 +812,15 @@ def run_capture(params):
     frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
     camera = _profile.get('camera', 'unknown')
 
+    # --- Exposure ramp (timelapse only) ---
+    iso_start    = float(params.get('iso_start', 0))
+    iso_end      = float(params.get('iso_end', 0))
+    exp_start    = float(params.get('exposure_start', 0))
+    exp_end      = float(params.get('exposure_end', 0))
+    ramp_duration = float(params.get('ramp_duration', 0))  # seconds; 0 = ramp full duration
+    doing_iso_ramp = interval > 0 and iso_start > 0 and iso_end > 0
+    doing_exp_ramp = interval > 0 and exp_start > 0 and exp_end > 0
+
     if frames <= 0:
         pub('event/error', {'message': f'frames must be > 0 (got {frames})'})
         with _capture_lock:
@@ -841,6 +850,8 @@ def run_capture(params):
             ramp_info += f' · ISO {int(iso_start)}→{int(iso_end)}'
         if doing_exp_ramp:
             ramp_info += f' · exp {exp_start}s→{exp_end}s'
+        if ramp_duration > 0 and (doing_iso_ramp or doing_exp_ramp):
+            ramp_info += f' (ramp {int(ramp_duration//60)}m then hold)'
         pub('event/info', {'message': f'Timelapse run ID: {session_ts} · {frames} frames · {interval:.0f}s interval{ramp_info}'})
 
     # --- Delayed start ---
@@ -862,7 +873,13 @@ def run_capture(params):
                     return
 
             # Per-frame ISO/exposure for ramp (logarithmic interpolation)
-            t = (i - 1) / max(frames - 1, 1)
+            # ramp_duration: clamp t at 1.0 once elapsed time exceeds ramp window
+            if ramp_duration > 0 and interval > 0:
+                import math as _math
+                ramp_frames = _math.ceil(ramp_duration / interval)
+                t = min(1.0, (i - 1) / max(min(ramp_frames, frames) - 1, 1))
+            else:
+                t = (i - 1) / max(frames - 1, 1)
             if doing_iso_ramp:
                 frame_iso = _snap_iso(iso_start * (iso_end / iso_start) ** t)
             else:
