@@ -836,7 +836,12 @@ def run_capture(params):
 
     # Publish run ID for timelapse so user can reference it for rendering
     if interval > 0:
-        pub('event/info', {'message': f'Timelapse run ID: {session_ts} \u00b7 {frames} frames \u00b7 {interval:.0f}s interval'})
+        ramp_info = ''
+        if doing_iso_ramp:
+            ramp_info += f' · ISO {int(iso_start)}→{int(iso_end)}'
+        if doing_exp_ramp:
+            ramp_info += f' · exp {exp_start}s→{exp_end}s'
+        pub('event/info', {'message': f'Timelapse run ID: {session_ts} · {frames} frames · {interval:.0f}s interval{ramp_info}'})
 
     # --- Delayed start ---
     if delay_start > 0:
@@ -856,14 +861,28 @@ def run_capture(params):
                     pub('status', {'state': 'idle', 'camera': camera})
                     return
 
-            log.info(f'Frame {i}/{frames}')
+            # Per-frame ISO/exposure for ramp (logarithmic interpolation)
+            t = (i - 1) / max(frames - 1, 1)
+            if doing_iso_ramp:
+                frame_iso = _snap_iso(iso_start * (iso_end / iso_start) ** t)
+            else:
+                frame_iso = iso
+            if doing_exp_ramp:
+                _cfg = current_camera_cfg()
+                _raw_exp = exp_start * (exp_end / exp_start) ** t
+                frame_exposure = round(max(_cfg['min_exposure'], min(_cfg['max_exposure'], _raw_exp)), 4)
+            else:
+                frame_exposure = exposure
+
+            log.info(f'Frame {i}/{frames} iso={frame_iso} exp={frame_exposure}s')
             pub('status', {'state': 'capturing', 'frame': i, 'total': frames,
-                           'camera': camera, 'mode': mode})
+                           'camera': camera, 'mode': mode,
+                                       'exposure': frame_exposure, 'iso': frame_iso})
 
             prefix = f'frame_{session_ts}_{i:04d}'
             frame_start = time.time()
             try:
-                ok, frame_path, preview_path = capture_one_frame(output, prefix, iso, exposure)
+                ok, frame_path, preview_path = capture_one_frame(output, prefix, frame_iso, frame_exposure)
             except Exception as e:
                 log.error(f'Frame {i} error: {e}')
                 pub('event/error', {'message': str(e)})
@@ -875,7 +894,7 @@ def run_capture(params):
                 log.warning(f'Frame {i}: capture failed, retrying in 3s...')
                 time.sleep(3)
                 try:
-                    ok, frame_path, preview_path = capture_one_frame(output, prefix, iso, exposure)
+                    ok, frame_path, preview_path = capture_one_frame(output, prefix, frame_iso, frame_exposure)
                 except Exception as e:
                     log.error(f'Frame {i} retry error: {e}')
                     pub('event/error', {'message': str(e)})
@@ -915,8 +934,8 @@ def run_capture(params):
                 try:
                     sidecar = {
                         'camera': camera,
-                        'exposure': exposure,
-                        'iso': iso,
+                        'exposure': frame_exposure,
+                        'iso': frame_iso,
                         'frame': i,
                         'frames_total': frames,
                         'session': session_ts,
@@ -956,7 +975,7 @@ def run_capture(params):
                         return
 
         complete_payload = {'frames': frames, 'camera': camera, 'mode': mode,
-                            'exposure': exposure, 'iso': iso, 'id': frame_id,
+                            'exposure': frame_exposure, 'iso': frame_iso, 'id': frame_id,
                             'profile': dict(_current_profile)}
         if interval > 0:
             complete_payload['run_id'] = session_ts
@@ -1205,6 +1224,52 @@ def on_message(client, userdata, msg):
                 except Exception:
                     pass
         threading.Thread(target=_battery_query, daemon=True).start()
+
+    elif topic == 'command/timelapse_profile/save':
+        name = payload.get('name', '').strip()
+        if not name:
+            pub('event/error', {'message': 'timelapse_profile/save: name required'})
+            return
+        profiles = load_timelapse_profiles()
+        entry = {k: v for k, v in payload.items() if k != 'name'}
+        # Save to user profiles file (built-ins not overwritten in file, just shadowed)
+        try:
+            os.makedirs(os.path.dirname(TIMELAPSE_PROFILES_FILE), exist_ok=True)
+            try:
+                with open(TIMELAPSE_PROFILES_FILE) as _f:
+                    user_profiles = json.load(_f)
+            except FileNotFoundError:
+                user_profiles = {}
+            user_profiles[name] = entry
+            with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
+                json.dump(user_profiles, _f, indent=2)
+            log.info(f'Timelapse profile saved: {name} = {entry}')
+            pub('event/info', {'message': f'✅ Profile *{name}* saved: ' + ', '.join(f'{k}={v}' for k, v in entry.items())})
+        except Exception as e:
+            pub('event/error', {'message': f'Profile save failed: {e}'})
+
+    elif topic == 'command/timelapse_profile/delete':
+        name = payload.get('name', '').strip()
+        if not name:
+            pub('event/error', {'message': 'timelapse_profile/delete: name required'})
+            return
+        if name in _BUILTIN_TIMELAPSE_PROFILES:
+            pub('event/error', {'message': f"Cannot delete built-in profile '{name}' — only custom profiles can be deleted."})
+            return
+        try:
+            with open(TIMELAPSE_PROFILES_FILE) as _f:
+                user_profiles = json.load(_f)
+            if name not in user_profiles:
+                pub('event/error', {'message': 'Profile not found: ' + name})
+            del user_profiles[name]
+            with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
+                json.dump(user_profiles, _f, indent=2)
+            log.info(f'Timelapse profile deleted: {name}')
+            pub('event/info', {'message': f'✅ Profile *{name}* deleted.'})
+        except FileNotFoundError:
+            pub('event/error', {'message': f'No custom profiles file found.'})
+        except Exception as e:
+            pub('event/error', {'message': f'Profile delete failed: {e}'})
 
     elif topic == 'command/delete':
         import glob as _glob
