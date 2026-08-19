@@ -1,0 +1,170 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Astro Quick Reference</title>
+<style>
+  @page { size: A4; margin: 11mm 10mm; }
+  * { box-sizing: border-box; }
+  body { font: 11.09pt/1.32 "DejaVu Sans", Arial, sans-serif; color: #111; margin: 0; }
+  header { border-bottom: 3.30pt solid #1a3a5c; padding-bottom: 3.96pt; margin-bottom: 9.24pt;
+           display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 19.80pt; margin: 0; letter-spacing: -0.26pt; color: #1a3a5c; }
+  .sub { font-size: 10.03pt; color: #667; }
+  table.layout { width: 100%; border-collapse: separate; border-spacing: 0; }
+  table.layout > tbody > tr > td { width: 50%; vertical-align: top; }
+  table.layout > tbody > tr > td.left { padding-right: 4.5mm; }
+  table.layout > tbody > tr > td.right { padding-left: 4.5mm; border-left: 0.53pt solid #e0e0e8; }
+  section { break-inside: avoid; margin-bottom: 8.58pt; }
+  h2 { font-size: 10.56pt; text-transform: uppercase; letter-spacing: 0.79pt; color: #1a3a5c;
+       margin: 0 0 3.30pt; padding-bottom: 1.98pt; border-bottom: 0.79pt solid #ccd; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 1.9pt 0; vertical-align: top; }
+  td.c { font-family: "DejaVu Sans Mono", monospace; font-size: 9.90pt; white-space: nowrap;
+         padding-right: 5.28pt; color: #000; }
+  td.d { color: #444; font-size: 10.03pt; }
+  .opt { color: #778; }
+  table.grid td { border-bottom: 0.53pt solid #e4e4ea; padding: 2.11pt 3.96pt 2.11pt 0; font-size: 9.77pt; }
+  table.grid th { text-align: left; font-size: 8.98pt; text-transform: uppercase; letter-spacing: 0.53pt;
+                  color: #667; border-bottom: 0.92pt solid #bbc; padding: 0 3.96pt 1.98pt 0; }
+  table.grid td:first-child { font-family: "DejaVu Sans Mono", monospace; color: #1a3a5c; }
+  .note { background: #f4f6f9; border-left: 2.64pt solid #1a3a5c; padding: 4.62pt 6.60pt; font-size: 9.77pt;
+          color: #334; margin-top: 1.32pt; }
+  .note b { color: #1a3a5c; }
+  footer { border-top: 0.92pt solid #ccd; margin-top: 6.60pt; padding-top: 3.96pt;
+           font-size: 8.98pt; color: #778; display: flex; justify-content: space-between; }
+  code { font-family: "DejaVu Sans Mono", monospace; background: #eef1f5; padding: 0 1.98pt; }
+</style>
+
+<header>
+  <h1>Astro &mdash; Telegram Quick Reference</h1>
+  <div class="sub">Sony a6400 &middot; pi4-astro-oz &middot; send to your Telegram bot</div>
+</header>
+
+<table class="layout"><tr><td class="left">
+
+<section>
+<h2>Capture</h2>
+<table>
+<tr><td class="c">/astro status</td><td class="d">State, camera, active profile</td></tr>
+<tr><td class="c">/astro capture</td><td class="d">One frame at profile settings</td></tr>
+<tr><td class="c">/astro capture <span class="opt">frames=N exposure=S iso=N</span></td><td class="d">Capture with overrides</td></tr>
+<tr><td class="c">/astro preview <span class="opt">exposure=S iso=N</span></td><td class="d">Quick single frame</td></tr>
+<tr><td class="c">/astro last</td><td class="d">Resend last preview</td></tr>
+<tr><td class="c">/astro abort</td><td class="d">Stop current session</td></tr>
+</table>
+<div class="note"><b>Abort waits.</b> It stops between frames &mdash; a
+300&thinsp;s exposure already running will finish first.</div>
+</section>
+
+<section>
+<h2>Timelapse</h2>
+<table>
+<tr><td class="c">/astro timelapse profile=&lt;name&gt;</td><td class="d">Run a named profile</td></tr>
+<tr><td class="c">/astro timelapse profile=&lt;name&gt; <span class="opt">duration=S</span></td><td class="d">Profile, any value overridden</td></tr>
+<tr><td class="c">/astro timelapse interval=S <span class="opt">frames=N</span></td><td class="d">Manual, by frame count</td></tr>
+<tr><td class="c">/astro timelapse interval=S <span class="opt">duration=S</span></td><td class="d">Manual, by total time</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Built-in profiles</h2>
+<table class="grid">
+<tr><th>Profile</th><th>Run</th><th>Every</th><th>ISO</th><th>Exposure</th></tr>
+<tr><td>sunset</td><td>90 min</td><td>6 s</td><td>100&rarr;3200</td><td>0.5&rarr;4 s</td></tr>
+<tr><td>sunrise</td><td>90 min</td><td>6 s</td><td>3200&rarr;100</td><td>4&rarr;0.5 s</td></tr>
+<tr><td>blue-hour</td><td>40 min</td><td>6 s</td><td>400&rarr;1600</td><td>1&rarr;3 s</td></tr>
+<tr><td>night-sky</td><td>2 hr</td><td>30 s</td><td>3200</td><td>15 s</td></tr>
+<tr><td>stars</td><td>3 hr</td><td>30 s</td><td>6400</td><td>20 s</td></tr>
+<tr><td>golden-hour</td><td>60 min</td><td>5 s</td><td>100</td><td>0.01 s</td></tr>
+</table>
+<div class="note">Twilight profiles ramp ISO and exposure logarithmically, then
+<b>hold</b> at the end values &mdash; sunset ramps 50&thinsp;min, holds 40.</div>
+</section>
+
+<section>
+<h2>Exposure ramping (manual)</h2>
+<table>
+<tr><td class="c">iso_start= iso_end=</td><td class="d">ISO at first and last ramp frame</td></tr>
+<tr><td class="c">exposure_start= exposure_end=</td><td class="d">Exposure across the ramp</td></tr>
+<tr><td class="c">ramp_duration=S</td><td class="d">Ramp seconds, then hold</td></tr>
+</table>
+</section>
+
+</td><td class="right">
+<section>
+<h2>Timelapse profiles</h2>
+<table>
+<tr><td class="c">/astro profiles</td><td class="d">List built-in + custom</td></tr>
+<tr><td class="c">/astro profile add &lt;name&gt; <span class="opt">k=v&hellip;</span></td><td class="d">Save a custom profile</td></tr>
+<tr><td class="c">/astro profile rm &lt;name&gt;</td><td class="d">Delete a custom profile</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Camera &amp; capture profile</h2>
+<table>
+<tr><td class="c">/astro camera</td><td class="d">Camera, limits, defaults</td></tr>
+<tr><td class="c">/astro camera a6400|a6700</td><td class="d">Switch camera</td></tr>
+<tr><td class="c">/astro profile</td><td class="d">Show active profile</td></tr>
+<tr><td class="c">/astro profile <span class="opt">frames=N exposure=S iso=N</span></td><td class="d">Update active profile</td></tr>
+<tr><td class="c">/astro defaults</td><td class="d">Show camera defaults</td></tr>
+<tr><td class="c">/astro defaults <span class="opt">k=v</span></td><td class="d">Save new defaults</td></tr>
+<tr><td class="c">/astro defaults load</td><td class="d">Reset profile to defaults</td></tr>
+<tr><td class="c">/astro battery</td><td class="d">Battery level</td></tr>
+<tr><td class="c">/astro limits</td><td class="d">Exposure and ISO limits</td></tr>
+<tr><td class="c">/astro exposures</td><td class="d">Valid shutter speeds</td></tr>
+<tr><td class="c">/astro isos</td><td class="d">Valid ISO values</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Presets <span class="opt">(capture profile snapshots)</span></h2>
+<table>
+<tr><td class="c">/astro preset list</td><td class="d">List saved presets</td></tr>
+<tr><td class="c">/astro preset save &lt;name&gt;</td><td class="d">Save current profile</td></tr>
+<tr><td class="c">/astro preset load &lt;name&gt;</td><td class="d">Load into active profile</td></tr>
+<tr><td class="c">/astro preset show &lt;name&gt;</td><td class="d">Show settings</td></tr>
+<tr><td class="c">/astro preset delete &lt;name&gt;</td><td class="d">Delete preset</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Sessions, archive, render</h2>
+<table>
+<tr><td class="c">/astro sessions</td><td class="d">Sessions on the Pi</td></tr>
+<tr><td class="c">/astro shots &lt;YYYYMMDD&gt;</td><td class="d">Frames + thumbnails</td></tr>
+<tr><td class="c">/astro archive session &lt;YYYYMMDD&gt;</td><td class="d">Archive session to LXD</td></tr>
+<tr><td class="c">/astro archive last | &lt;id&gt;</td><td class="d">Archive one frame</td></tr>
+<tr><td class="c">/astro archived <span class="opt">[session]</span></td><td class="d">Browse the LXD archive</td></tr>
+<tr><td class="c">/astro render &lt;YYYYMMDD_HHMMSS&gt;</td><td class="d">Stitch a run into MP4</td></tr>
+<tr><td class="c">/astro delete session &lt;YYYYMMDD&gt; <span class="opt">confirm</span></td><td class="d">Delete a session</td></tr>
+<tr><td class="c">/astro delete all <span class="opt">confirm</span></td><td class="d">Delete all shots</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Before a session</h2>
+<div class="note">
+<b>1.</b> Camera on, dial to <b>M</b> (Manual).<br>
+<b>2.</b> Menu &rarr; Setup &rarr; USB Connection &rarr; <b>PC Remote</b>.<br>
+If it shows as &ldquo;charging mode&rdquo;, gphoto2 cannot see it.<br>
+<b>3.</b> <code>/astro battery</code> to confirm the link.
+</div>
+</section>
+
+<section>
+<h2>Rules of thumb</h2>
+<div class="note">
+<b>500 rule.</b> Max exposure before star trails &asymp; 500 &divide; focal length.
+A 20&thinsp;mm lens &rarr; ~25&thinsp;s.<br>
+<b>Bulb is automatic.</b> Over 30&thinsp;s switches to bulb with no action needed.<br>
+<b>Mount control is not implemented</b> &mdash; <code>/astro track</code> replies
+&ldquo;Mount not connected yet&rdquo;.
+</div>
+</section>
+
+</td></tr></table>
+
+<footer>
+  <span>Frames: ARW + JPEG preview + JSON sidecar &rarr; /shots on pi4-astro-oz &middot; browse at :8080</span>
+  <span>Generated 20 Aug 2026</span>
+</footer>
