@@ -123,7 +123,7 @@ When a timelapse starts, the bot sends a **run ID** (`YYYYMMDD_HHMMSS`) — save
 Instead of specifying all parameters manually, use a named profile:
 
 ```
-/astro timelapse profile=sunset
+/astro timelapse profile=timelapse-sunset
 ```
 
 **Listing available profiles:**
@@ -131,21 +131,33 @@ Instead of specifying all parameters manually, use a named profile:
 /astro profiles
 ```
 
+### Naming convention
+
+A profile whose name starts with `timelapse-` runs a **sequence** — it carries
+an interval and a duration. Any other name is a **single shot**. The name tells
+you which you are getting, so `/astro capture profile=deep-sky` cannot
+accidentally start a three-hour run.
+
+Profiles work with both `/astro capture` and `/astro timelapse`.
+
+**Presets** are a different thing: they snapshot the active camera settings
+(frames, exposure, ISO) with no timing at all.
+
 ### Built-in profiles
 
 | Profile | Duration | Interval | ISO | Exposure | Notes |
 |---|---|---|---|---|---|
-| `sunset` | 90 min | 6s | 100→3200 | 0.5s→4s | Ramps 50 min, holds 40 min |
-| `sunrise` | 90 min | 6s | 3200→100 | 4s→0.5s | Ramps 50 min, holds 40 min |
-| `blue-hour` | 40 min | 6s | 400→1600 | 1s→3s | Ramps 20 min, holds 20 min |
-| `night-sky` | 2 hrs | 30s | 3200 fixed | 15s | Fixed, no ramp |
-| `stars` | 3 hrs | 30s | 6400 fixed | 20s | Fixed, no ramp |
-| `golden-hour` | 1 hr | 5s | 100 fixed | 0.01s | Short, auto-ish |
+| `timelapse-sunset` | 90 min | 6s | 100→3200 | 0.5s→4s | Ramps 50 min, holds 40 min |
+| `timelapse-sunrise` | 90 min | 6s | 3200→100 | 4s→0.5s | Ramps 50 min, holds 40 min |
+| `timelapse-blue-hour` | 40 min | 6s | 400→1600 | 1s→3s | Ramps 20 min, holds 20 min |
+| `timelapse-night-sky` | 2 hrs | 30s | 3200 fixed | 15s | Fixed, no ramp |
+| `timelapse-stars` | 3 hrs | 30s | 6400 fixed | 20s | Fixed, no ramp |
+| `timelapse-golden-hour` | 1 hr | 5s | 100 fixed | 0.01s | Short, auto-ish |
 
 You can override any profile parameter on the command line:
 ```
-/astro timelapse profile=night-sky duration=10800    — extend to 3 hours
-/astro timelapse profile=sunset ramp_duration=2400   — ramp over 40 min instead of 50
+/astro timelapse profile=timelapse-night-sky duration=10800    — extend to 3 hours
+/astro timelapse profile=timelapse-sunset ramp_duration=2400   — ramp over 40 min instead of 50
 ```
 
 ---
@@ -162,7 +174,7 @@ For twilight transitions, the system ramps **ISO and exposure logarithmically** 
 
 The ramp follows a log curve: doubling ISO takes the same number of frames whether you're going from 100→200 or 1600→3200. This matches real-world light behaviour and produces smooth transitions.
 
-**After `ramp_duration` elapses**, ISO and exposure are clamped at their end values for the rest of the timelapse. So for `sunset`, the first 50 minutes ramp from daylight to dark settings, then the camera holds at ISO 3200 / 4s for the final 40 minutes of full darkness.
+**After `ramp_duration` elapses**, ISO and exposure are clamped at their end values for the rest of the timelapse. So for `timelapse-sunset`, the first 50 minutes ramp from daylight to dark settings, then the camera holds at ISO 3200 / 4s for the final 40 minutes of full darkness.
 
 ### Ramping manually (without a profile)
 
@@ -270,15 +282,15 @@ Rendering 900 frames takes a few minutes. The output file is named `timelapse_YY
 ## 10. Tips and best practices
 
 **For twilight (holy grail) timelapses:**
-- Start the timelapse ~5–10 min before you want ramping to begin (the `sunset` profile runs for 90 min — start it at golden hour)
-- `blue-hour` is better if you only want the 40-minute twilight window without the full golden hour buildup
+- Start the timelapse ~5–10 min before you want ramping to begin (the `timelapse-sunset` profile runs for 90 min — start it at golden hour)
+- `timelapse-blue-hour` is better if you only want the 40-minute twilight window without the full golden hour buildup
 - Cloudy nights will have the ramp complete faster — you can always shorten `ramp_duration`
 
 **For night sky:**
 - Camera in Manual mode is essential — Auto ISO or Auto shutter will fight the ramp
 - Check battery with `/astro battery` before a long shoot
-- `night-sky` (30s interval) gives you 240 frames/2 hrs — ~10 seconds of video at 24fps
-- `stars` (30s interval, 3 hrs) gives ~360 frames — ~15 seconds of video
+- `timelapse-night-sky` (30s interval) gives you 240 frames/2 hrs — ~10 seconds of video at 24fps
+- `timelapse-stars` (30s interval, 3 hrs) gives ~360 frames — ~15 seconds of video
 
 **Post-processing:**
 - The rendered MP4 is a direct stitch of JPEGs at 24fps
@@ -369,12 +381,12 @@ Rendering 900 frames takes a few minutes. The output file is named `timelapse_YY
 
 | Profile | Duration | Interval | ISO | Exposure | Ramp |
 |---|---|---|---|---|---|
-| `sunset` | 90 min | 6s | 100 → 3200 | 0.5s → 4s | 50 min, then hold |
-| `sunrise` | 90 min | 6s | 3200 → 100 | 4s → 0.5s | 50 min, then hold |
-| `blue-hour` | 40 min | 6s | 400 → 1600 | 1s → 3s | 20 min, then hold |
-| `night-sky` | 2 hrs | 30s | 3200 | 15s | Fixed |
-| `stars` | 3 hrs | 30s | 6400 | 20s | Fixed |
-| `golden-hour` | 1 hr | 5s | 100 | ~0.01s | Fixed |
+| `timelapse-sunset` | 90 min | 6s | 100 → 3200 | 0.5s → 4s | 50 min, then hold |
+| `timelapse-sunrise` | 90 min | 6s | 3200 → 100 | 4s → 0.5s | 50 min, then hold |
+| `timelapse-blue-hour` | 40 min | 6s | 400 → 1600 | 1s → 3s | 20 min, then hold |
+| `timelapse-night-sky` | 2 hrs | 30s | 3200 | 15s | Fixed |
+| `timelapse-stars` | 3 hrs | 30s | 6400 | 20s | Fixed |
+| `timelapse-golden-hour` | 1 hr | 5s | 100 | ~0.01s | Fixed |
 
 All durations and ramp windows can be overridden per-command.
 
@@ -423,7 +435,7 @@ Any timelapse parameter above can be stored in a custom profile:
 1. Set up camera, point west, focus at infinity
 2. Start 5–10 min before golden hour:
    ```
-   /astro timelapse profile=sunset
+   /astro timelapse profile=timelapse-sunset
    ```
 3. Note the run ID from the bot reply
 4. After 90 min, archive the session:
@@ -440,7 +452,7 @@ Any timelapse parameter above can be stored in a custom profile:
 1. Camera in Manual, ISO 6400, widest aperture, focus at infinity
 2. Check 500-rule: for a 20mm lens, max ~25s exposure
    ```
-   /astro timelapse profile=stars
+   /astro timelapse profile=timelapse-stars
    ```
 3. Or with 500-rule compliant exposure for your lens:
    ```
@@ -464,7 +476,7 @@ Check the preview for framing, focus, and that no light pollution is ruining the
 
 ### Custom twilight for a specific location/season
 
-The built-in `sunset` profile ramps for 50 minutes. If your twilight is faster (tropics) or slower (high latitude summer), adjust:
+The built-in `timelapse-sunset` profile ramps for 50 minutes. If your twilight is faster (tropics) or slower (high latitude summer), adjust:
 
 ```
 /astro profile add tropical-sunset interval=6 duration=4200 iso_start=100 iso_end=3200 exposure_start=0.5 exposure_end=4 ramp_duration=2400

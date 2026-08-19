@@ -64,36 +64,43 @@ CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
 TIMELAPSE_PROFILES_FILE = os.environ.get('TIMELAPSE_PROFILES_FILE',
                                          '/config/timelapse_profiles.json')
 
-# ---- Timelapse profiles ----
-# Named parameter sets for a whole timelapse run, as opposed to CAMERA_PROFILES
-# (which is per-body limits) and the active capture profile (frames/exposure/iso).
+# ---- Capture profiles ----
+# Named parameter sets, usable by BOTH /astro capture and /astro timelapse.
+#
+# NAMING CONVENTION: a profile whose name starts with 'timelapse-' runs a
+# sequence - it carries an interval and a duration. Any other name is a single
+# shot and leaves interval at 0. The name tells you which you are getting, so
+# `/astro capture profile=deep-sky` cannot accidentally start a three-hour run.
+#
+# Distinct from CAMERA_PROFILES (per-body limits) and from presets, which
+# snapshot the active camera settings (frames/exposure/iso) with no timing.
 #
 # Twilight profiles ramp ISO and exposure logarithmically for ramp_duration
 # seconds, then hold at the end values for the remainder - so sunset ramps from
 # daylight to dark over 50 min, then sits at ISO 3200 / 4s for the final 40.
 # Fixed profiles omit the *_start/*_end keys entirely.
 _BUILTIN_TIMELAPSE_PROFILES = {
-    'sunset': {
+    'timelapse-sunset': {
         'duration': 5400, 'interval': 6,
         'iso_start': 100, 'iso_end': 3200,
         'exposure_start': 0.5, 'exposure_end': 4,
         'ramp_duration': 3000,
     },
-    'sunrise': {
+    'timelapse-sunrise': {
         'duration': 5400, 'interval': 6,
         'iso_start': 3200, 'iso_end': 100,
         'exposure_start': 4, 'exposure_end': 0.5,
         'ramp_duration': 3000,
     },
-    'blue-hour': {
+    'timelapse-blue-hour': {
         'duration': 2400, 'interval': 6,
         'iso_start': 400, 'iso_end': 1600,
         'exposure_start': 1, 'exposure_end': 3,
         'ramp_duration': 1200,
     },
-    'night-sky': {'duration': 7200,  'interval': 30, 'iso': 3200, 'exposure': 15},
-    'stars':     {'duration': 10800, 'interval': 30, 'iso': 6400, 'exposure': 20},
-    'golden-hour': {'duration': 3600, 'interval': 5, 'iso': 100, 'exposure': 0.01},
+    'timelapse-night-sky': {'duration': 7200,  'interval': 30, 'iso': 3200, 'exposure': 15},
+    'timelapse-stars': {'duration': 10800, 'interval': 30, 'iso': 6400, 'exposure': 20},
+    'timelapse-golden-hour': {'duration': 3600, 'interval': 5, 'iso': 100, 'exposure': 0.01},
 }
 
 
@@ -136,6 +143,8 @@ def describe_timelapse_profile(p, is_builtin=False):
         bits.append(f"ramp {float(p['ramp_duration'])/60:.0f} min then hold")
     if not is_builtin:
         bits.append('custom')
+    if not bits:
+        bits.append('camera settings only')
     return ' \u00b7 '.join(bits)
 
 
@@ -145,8 +154,11 @@ def _fmt_num(v):
     return str(int(f)) if f == int(f) else str(f)
 
 
-def apply_timelapse_profile(params):
+def apply_profile(params):
     """Expand params['profile'] into the run's parameters.
+
+    Used by both /astro capture and /astro timelapse - the profile name decides
+    which you get, per the timelapse- convention above.
 
     Explicit parameters always win, so `profile=night-sky duration=10800`
     extends the run without having to restate the rest. Returns the merged dict;
@@ -164,7 +176,13 @@ def apply_timelapse_profile(params):
     merged = dict(profiles[name])
     merged.update({k: v for k, v in params.items() if k != 'profile'})
     merged['profile_name'] = name
-    log.info(f'Timelapse profile {name} -> {merged}')
+    # Enforce the naming convention rather than just documenting it: a profile
+    # not named timelapse-* is a single shot, so drop any timing it carries.
+    # Explicitly passing interval= still wins, since that is a deliberate act.
+    if not name.startswith('timelapse-') and 'interval' not in params:
+        merged.pop('interval', None)
+        merged.pop('duration', None)
+    log.info(f'Profile {name} -> {merged}')
     return merged
 
 # ---- Camera profiles ----
@@ -898,7 +916,7 @@ def run_capture(params):
     global _capturing, _last_preview_path, _last_fits_path, _last_raw_path, _last_hq_jpeg_path, _last_known_mode
 
     # A named profile only supplies defaults; anything given explicitly wins.
-    params = apply_timelapse_profile(params)
+    params = apply_profile(params)
 
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
@@ -1381,7 +1399,7 @@ def on_message(client, userdata, msg):
             user_profiles[name] = entry
             with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
                 json.dump(user_profiles, _f, indent=2)
-            log.info(f'Timelapse profile saved: {name} = {entry}')
+            log.info(f'Profile saved: {name} = {entry}')
             pub('event/info', {'message': f'✅ Profile *{name}* saved: ' + ', '.join(f'{k}={v}' for k, v in entry.items())})
         except Exception as e:
             pub('event/error', {'message': f'Profile save failed: {e}'})
@@ -1403,7 +1421,7 @@ def on_message(client, userdata, msg):
             del user_profiles[name]
             with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
                 json.dump(user_profiles, _f, indent=2)
-            log.info(f'Timelapse profile deleted: {name}')
+            log.info(f'Profile deleted: {name}')
             pub('event/info', {'message': f'✅ Profile *{name}* deleted.'})
         except FileNotFoundError:
             pub('event/error', {'message': f'No custom profiles file found.'})

@@ -67,15 +67,15 @@
 </section>
 
 <section>
-<h2>Built-in profiles</h2>
+<h2>Built-in profiles <span class="opt">(timelapse-)</span></h2>
 <table class="grid">
 <tr><th>Profile</th><th>Run</th><th>Every</th><th>ISO</th><th>Exposure</th></tr>
-<tr><td>sunset</td><td>90 min</td><td>6 s</td><td>100&rarr;3200</td><td>0.5&rarr;4 s</td></tr>
-<tr><td>sunrise</td><td>90 min</td><td>6 s</td><td>3200&rarr;100</td><td>4&rarr;0.5 s</td></tr>
-<tr><td>blue-hour</td><td>40 min</td><td>6 s</td><td>400&rarr;1600</td><td>1&rarr;3 s</td></tr>
-<tr><td>night-sky</td><td>2 hr</td><td>30 s</td><td>3200</td><td>15 s</td></tr>
-<tr><td>stars</td><td>3 hr</td><td>30 s</td><td>6400</td><td>20 s</td></tr>
-<tr><td>golden-hour</td><td>60 min</td><td>5 s</td><td>100</td><td>0.01 s</td></tr>
+<tr><td>timelapse-sunset</td><td>90 min</td><td>6 s</td><td>100&rarr;3200</td><td>0.5&rarr;4 s</td></tr>
+<tr><td>timelapse-sunrise</td><td>90 min</td><td>6 s</td><td>3200&rarr;100</td><td>4&rarr;0.5 s</td></tr>
+<tr><td>timelapse-blue-hour</td><td>40 min</td><td>6 s</td><td>400&rarr;1600</td><td>1&rarr;3 s</td></tr>
+<tr><td>timelapse-night-sky</td><td>2 hr</td><td>30 s</td><td>3200</td><td>15 s</td></tr>
+<tr><td>timelapse-stars</td><td>3 hr</td><td>30 s</td><td>6400</td><td>20 s</td></tr>
+<tr><td>timelapse-golden-hour</td><td>60 min</td><td>5 s</td><td>100</td><td>0.01 s</td></tr>
 </table>
 <div class="note">Twilight profiles ramp ISO and exposure logarithmically, then
 <b>hold</b> at the end values &mdash; sunset ramps 50&thinsp;min, holds 40.</div>
@@ -91,10 +91,12 @@
 </section>
 
 <section>
-<h2>Timelapse profiles</h2>
+<h2>Profiles</h2>
 <table>
 <tr><td class="c">/astro profiles</td><td class="d">List built-in + custom</td></tr>
+<tr><td class="c">/astro capture profile=&lt;name&gt;</td><td class="d">Single shot from a profile</td></tr>
 <tr><td class="c">/astro profile add &lt;name&gt; <span class="opt">k=v&hellip;</span></td><td class="d">Save a custom profile</td></tr>
+<tr><td class="c">/astro profile add timelapse-&lt;name&gt;</td><td class="d">&hellip;with interval= it runs a sequence</td></tr>
 <tr><td class="c">/astro profile rm &lt;name&gt;</td><td class="d">Delete a custom profile</td></tr>
 </table>
 </section>
@@ -156,6 +158,8 @@ If it shows as &ldquo;charging mode&rdquo;, gphoto2 cannot see it.<br>
 <div class="note">
 <b>500 rule.</b> Max exposure before star trails &asymp; 500 &divide; focal length.
 A 20&thinsp;mm lens &rarr; ~25&thinsp;s.<br>
+<b>Names matter.</b> A profile called <code>timelapse-*</code> runs a sequence;
+any other name is a single shot. Presets are camera settings only.<br>
 <b>Bulb is automatic.</b> Over 30&thinsp;s switches to bulb with no action needed.<br>
 <b>Mount control is not implemented</b> &mdash; <code>/astro track</code> replies
 &ldquo;Mount not connected yet&rdquo;.
