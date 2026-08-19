@@ -296,6 +296,10 @@ Rendering 900 frames takes a few minutes. The output file is named `timelapse_YY
 
 ## All commands
 
+> `/astro track` exists but is a stub — it replies "Mount not connected yet".
+> Star Adventurer 2i integration is not implemented.
+
+
 ### Camera & Profile
 
 | Command | Description |
@@ -338,6 +342,7 @@ Rendering 900 frames takes a few minutes. The output file is named `timelapse_YY
 | Command | Description |
 |---|---|
 | `/astro timelapse profile=<name>` | Run a named timelapse profile |
+| `/astro timelapse profile=<name> duration=S` | Profile with any parameter overridden |
 | `/astro timelapse interval=S [frames=N\|duration=S] [exposure=S] [iso=N]` | Manual timelapse |
 | `/astro timelapse ... iso_start=N iso_end=N exposure_start=S exposure_end=S [ramp_duration=S]` | With exposure ramp |
 | `/astro profiles` | List all timelapse profiles (built-in + custom) |
