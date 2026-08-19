@@ -110,6 +110,31 @@ def _resolve_iso(iso):
     return matched, best[1], str(best[0])
 
 
+# ── Output ownership ──────────────────────────────────────────────────────────
+# This service runs as root (needed for USB), so anything it creates is
+# root-owned. mqtt-bridge runs as uid 1000 and writes a JSON metadata sidecar
+# next to each frame - it cannot, if the directory is root-owned, and every
+# capture logged "Sidecar write failed: Permission denied". setup.sh chowns
+# shots/ at install time, but os.makedirs below recreates it as root whenever
+# the directory is missing, so ownership drifts back.
+#
+# The sidecar is the only per-frame record of the ISO and exposure actually
+# used, which matters for ramped timelapses where every frame differs.
+SHOTS_UID = int(os.environ.get('SHOTS_UID', '1000'))
+SHOTS_GID = int(os.environ.get('SHOTS_GID', '1000'))
+
+
+def _ensure_output_dir(output):
+    """Create the output directory owned by the bridge's uid, not root."""
+    existed = os.path.isdir(output)
+    _ensure_output_dir(output)
+    if not existed:
+        try:
+            os.chown(output, SHOTS_UID, SHOTS_GID)
+        except OSError as e:
+            log.warning(f'Could not chown {output}: {e}')
+
+
 # ── gphoto2 discrete shutter ──────────────────────────────────────────────────
 
 def _capture_gphoto2(exposure, iso, prefix, output):
@@ -129,7 +154,7 @@ def _capture_gphoto2(exposure, iso, prefix, output):
     if errors:
         raise ValueError('; '.join(errors))
 
-    os.makedirs(output, exist_ok=True)
+    _ensure_output_dir(output)
     cmd = ['gphoto2', '--set-config', f'shutterspeed={ss}']
     if iso_str is not None:
         cmd += ['--set-config', f'iso={iso_str}']
@@ -346,7 +371,7 @@ class _IndiCapture:
 
 
 def _capture_indi_bulb(exposure, iso, prefix, output, sensor):
-    os.makedirs(output, exist_ok=True)
+    _ensure_output_dir(output)
     indi = _IndiCapture()
     try:
         indi.connect(timeout=30)
@@ -394,7 +419,7 @@ def _capture_gphoto2_bulb(exposure, iso, prefix, output):
         if not matched_i:
             raise ValueError(f'invalid ISO {iso} (closest: {iso_label})')
 
-    os.makedirs(output, exist_ok=True)
+    _ensure_output_dir(output)
     seconds = max(1, int(round(exposure)))
 
     cmd = ['gphoto2',
