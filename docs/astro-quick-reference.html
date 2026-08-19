@@ -4,34 +4,35 @@
 <style>
   @page { size: A4; margin: 11mm 10mm; }
   * { box-sizing: border-box; }
-  body { font: 11.09pt/1.32 "DejaVu Sans", Arial, sans-serif; color: #111; margin: 0; }
-  header { border-bottom: 3.30pt solid #1a3a5c; padding-bottom: 3.96pt; margin-bottom: 9.24pt;
+  body { font: 8.40pt/1.32 "DejaVu Sans", Arial, sans-serif; color: #111; margin: 0; }
+  header { border-bottom: 2.50pt solid #1a3a5c; padding-bottom: 3.00pt; margin-bottom: 7.00pt;
            display: flex; justify-content: space-between; align-items: baseline; }
-  h1 { font-size: 19.80pt; margin: 0; letter-spacing: -0.26pt; color: #1a3a5c; }
-  .sub { font-size: 10.03pt; color: #667; }
+  h1 { font-size: 15.00pt; margin: 0; letter-spacing: -0.20pt; color: #1a3a5c; }
+  .sub { font-size: 7.60pt; color: #667; }
   table.layout { width: 100%; border-collapse: separate; border-spacing: 0; }
   table.layout > tbody > tr > td { width: 50%; vertical-align: top; }
   table.layout > tbody > tr > td.left { padding-right: 4.5mm; }
-  table.layout > tbody > tr > td.right { padding-left: 4.5mm; border-left: 0.53pt solid #e0e0e8; }
-  section { break-inside: avoid; margin-bottom: 8.58pt; }
-  h2 { font-size: 10.56pt; text-transform: uppercase; letter-spacing: 0.79pt; color: #1a3a5c;
-       margin: 0 0 3.30pt; padding-bottom: 1.98pt; border-bottom: 0.79pt solid #ccd; }
+  table.layout > tbody > tr > td.right { padding-left: 4.5mm; border-left: 0.40pt solid #e0e0e8; }
+  section { break-inside: avoid; margin-bottom: 6.50pt; }
+  h2 { font-size: 8.00pt; text-transform: uppercase; letter-spacing: 0.60pt; color: #1a3a5c;
+       margin: 0 0 2.50pt; padding-bottom: 1.50pt; border-bottom: 0.60pt solid #ccd; }
+  .cols { columns: 2; column-gap: 8mm; column-rule: 0.30pt solid #dde; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 1.9pt 0; vertical-align: top; }
-  td.c { font-family: "DejaVu Sans Mono", monospace; font-size: 9.90pt; white-space: nowrap;
-         padding-right: 5.28pt; color: #000; }
-  td.d { color: #444; font-size: 10.03pt; }
+  td { padding: 1.44pt 0; vertical-align: top; }
+  td.c { font-family: "DejaVu Sans Mono", monospace; font-size: 7.50pt; white-space: nowrap;
+         padding-right: 4.00pt; color: #000; }
+  td.d { color: #444; font-size: 7.60pt; }
   .opt { color: #778; }
-  table.grid td { border-bottom: 0.53pt solid #e4e4ea; padding: 2.11pt 3.96pt 2.11pt 0; font-size: 9.77pt; }
-  table.grid th { text-align: left; font-size: 8.98pt; text-transform: uppercase; letter-spacing: 0.53pt;
-                  color: #667; border-bottom: 0.92pt solid #bbc; padding: 0 3.96pt 1.98pt 0; }
+  table.grid td { border-bottom: 0.40pt solid #e4e4ea; padding: 1.60pt 3.00pt 1.60pt 0; font-size: 7.40pt; }
+  table.grid th { text-align: left; font-size: 6.80pt; text-transform: uppercase; letter-spacing: 0.40pt;
+                  color: #667; border-bottom: 0.70pt solid #bbc; padding: 0 3.00pt 1.50pt 0; }
   table.grid td:first-child { font-family: "DejaVu Sans Mono", monospace; color: #1a3a5c; }
-  .note { background: #f4f6f9; border-left: 2.64pt solid #1a3a5c; padding: 4.62pt 6.60pt; font-size: 9.77pt;
-          color: #334; margin-top: 1.32pt; }
+  .note { background: #f4f6f9; border-left: 2.00pt solid #1a3a5c; padding: 3.50pt 5.00pt; font-size: 7.40pt;
+          color: #334; margin-top: 1.00pt; }
   .note b { color: #1a3a5c; }
-  footer { border-top: 0.92pt solid #ccd; margin-top: 6.60pt; padding-top: 3.96pt;
-           font-size: 8.98pt; color: #778; display: flex; justify-content: space-between; }
-  code { font-family: "DejaVu Sans Mono", monospace; background: #eef1f5; padding: 0 1.98pt; }
+  footer { border-top: 0.70pt solid #ccd; margin-top: 5.00pt; padding-top: 3.00pt;
+           font-size: 6.80pt; color: #778; display: flex; justify-content: space-between; }
+  code { font-family: "DejaVu Sans Mono", monospace; background: #eef1f5; padding: 0 1.50pt; }
 </style>
 
 <header>
@@ -39,7 +40,7 @@
   <div class="sub">Sony a6400 &middot; pi4-astro-oz &middot; send to your Telegram bot</div>
 </header>
 
-<table class="layout"><tr><td class="left">
+<div class="cols">
 
 <section>
 <h2>Capture</h2>
@@ -89,7 +90,6 @@
 </table>
 </section>
 
-</td><td class="right">
 <section>
 <h2>Timelapse profiles</h2>
 <table>
@@ -162,7 +162,7 @@ A 20&thinsp;mm lens &rarr; ~25&thinsp;s.<br>
 </div>
 </section>
 
-</td></tr></table>
+</div>
 
 <footer>
   <span>Frames: ARW + JPEG preview + JSON sidecar &rarr; /shots on pi4-astro-oz &middot; browse at :8080</span>
