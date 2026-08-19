@@ -61,6 +61,111 @@ CAMERA_DEV  = os.environ.get('CAMERA_DEVICE', 'GPhoto CCD')
 PROFILE_FILE  = os.environ.get('PROFILE_FILE',  '/config/profile.json')
 PRESETS_FILE  = os.environ.get('PRESETS_FILE',  '/config/presets.json')
 CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
+TIMELAPSE_PROFILES_FILE = os.environ.get('TIMELAPSE_PROFILES_FILE',
+                                         '/config/timelapse_profiles.json')
+
+# ---- Timelapse profiles ----
+# Named parameter sets for a whole timelapse run, as opposed to CAMERA_PROFILES
+# (which is per-body limits) and the active capture profile (frames/exposure/iso).
+#
+# Twilight profiles ramp ISO and exposure logarithmically for ramp_duration
+# seconds, then hold at the end values for the remainder - so sunset ramps from
+# daylight to dark over 50 min, then sits at ISO 3200 / 4s for the final 40.
+# Fixed profiles omit the *_start/*_end keys entirely.
+_BUILTIN_TIMELAPSE_PROFILES = {
+    'sunset': {
+        'duration': 5400, 'interval': 6,
+        'iso_start': 100, 'iso_end': 3200,
+        'exposure_start': 0.5, 'exposure_end': 4,
+        'ramp_duration': 3000,
+    },
+    'sunrise': {
+        'duration': 5400, 'interval': 6,
+        'iso_start': 3200, 'iso_end': 100,
+        'exposure_start': 4, 'exposure_end': 0.5,
+        'ramp_duration': 3000,
+    },
+    'blue-hour': {
+        'duration': 2400, 'interval': 6,
+        'iso_start': 400, 'iso_end': 1600,
+        'exposure_start': 1, 'exposure_end': 3,
+        'ramp_duration': 1200,
+    },
+    'night-sky': {'duration': 7200,  'interval': 30, 'iso': 3200, 'exposure': 15},
+    'stars':     {'duration': 10800, 'interval': 30, 'iso': 6400, 'exposure': 20},
+    'golden-hour': {'duration': 3600, 'interval': 5, 'iso': 100, 'exposure': 0.01},
+}
+
+
+def load_timelapse_profiles():
+    """Built-ins merged with any user-defined profiles.
+
+    User entries shadow built-ins of the same name rather than replacing them,
+    so deleting a custom profile restores the built-in behaviour.
+    """
+    profiles = dict(_BUILTIN_TIMELAPSE_PROFILES)
+    try:
+        with open(TIMELAPSE_PROFILES_FILE) as fh:
+            profiles.update(json.load(fh))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.warning(f'Could not read {TIMELAPSE_PROFILES_FILE}: {e}')
+    return profiles
+
+
+def describe_timelapse_profile(p, is_builtin=False):
+    """One-line human summary of a timelapse profile, for the Telegram list."""
+    bits = []
+    if p.get('duration'):
+        mins = float(p['duration']) / 60
+        bits.append(f'{mins:.0f} min' if mins < 120 else f'{mins/60:.0f} hr')
+    elif p.get('frames'):
+        bits.append(f"{p['frames']} frames")
+    if p.get('interval'):
+        bits.append(f"every {_fmt_num(p['interval'])}s")
+    if p.get('iso_start') and p.get('iso_end'):
+        bits.append(f"ISO {_fmt_num(p['iso_start'])}\u2192{_fmt_num(p['iso_end'])}")
+    elif p.get('iso'):
+        bits.append(f"ISO {_fmt_num(p['iso'])}")
+    if p.get('exposure_start') and p.get('exposure_end'):
+        bits.append(f"{_fmt_num(p['exposure_start'])}s\u2192{_fmt_num(p['exposure_end'])}s")
+    elif p.get('exposure'):
+        bits.append(f"{_fmt_num(p['exposure'])}s")
+    if p.get('ramp_duration'):
+        bits.append(f"ramp {float(p['ramp_duration'])/60:.0f} min then hold")
+    if not is_builtin:
+        bits.append('custom')
+    return ' \u00b7 '.join(bits)
+
+
+def _fmt_num(v):
+    """Trim trailing zeros so 0.50 shows as 0.5 and 3200.0 as 3200."""
+    f = float(v)
+    return str(int(f)) if f == int(f) else str(f)
+
+
+def apply_timelapse_profile(params):
+    """Expand params['profile'] into the run's parameters.
+
+    Explicit parameters always win, so `profile=night-sky duration=10800`
+    extends the run without having to restate the rest. Returns the merged dict;
+    an unknown name is reported and the profile ignored rather than failing the
+    whole capture.
+    """
+    name = str(params.get('profile', '')).strip()
+    if not name:
+        return params
+    profiles = load_timelapse_profiles()
+    if name not in profiles:
+        pub('event/error', {'message': 'Unknown timelapse profile: ' + name
+                            + '. Available: ' + ', '.join(sorted(profiles))})
+        return params
+    merged = dict(profiles[name])
+    merged.update({k: v for k, v in params.items() if k != 'profile'})
+    merged['profile_name'] = name
+    log.info(f'Timelapse profile {name} -> {merged}')
+    return merged
 
 # ---- Camera profiles ----
 
@@ -792,6 +897,9 @@ def capture_one_frame(output, prefix, iso, exposure):
 def run_capture(params):
     global _capturing, _last_preview_path, _last_fits_path, _last_raw_path, _last_hq_jpeg_path, _last_known_mode
 
+    # A named profile only supplies defaults; anything given explicitly wins.
+    params = apply_timelapse_profile(params)
+
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
     delay = float(params.get('delay', 0))
@@ -1242,6 +1350,19 @@ def on_message(client, userdata, msg):
                     pass
         threading.Thread(target=_battery_query, daemon=True).start()
 
+    elif topic == 'query/timelapse_profiles':
+        profiles = load_timelapse_profiles()
+        builtin = set(_BUILTIN_TIMELAPSE_PROFILES)
+        # The Telegram formatter concatenates each value as a string, so send a
+        # human summary per profile and keep the raw parameters alongside it.
+        pub('event/timelapse_profiles', {
+            'profiles': {n: describe_timelapse_profile(p, n in builtin)
+                         for n, p in sorted(profiles.items())},
+            'params': profiles,
+            'builtin': sorted(builtin),
+            'custom': sorted(set(profiles) - builtin),
+        })
+
     elif topic == 'command/timelapse_profile/save':
         name = payload.get('name', '').strip()
         if not name:
@@ -1278,6 +1399,7 @@ def on_message(client, userdata, msg):
                 user_profiles = json.load(_f)
             if name not in user_profiles:
                 pub('event/error', {'message': 'Profile not found: ' + name})
+                return
             del user_profiles[name]
             with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
                 json.dump(user_profiles, _f, indent=2)
