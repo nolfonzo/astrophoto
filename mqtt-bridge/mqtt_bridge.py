@@ -17,12 +17,8 @@ Command topics  (n150 → Pi 4):
   astrophoto/command/camera    {"camera": "a6400"}
   astrophoto/command/defaults/load
   astrophoto/command/profile/set  {"frames": 5, "exposure": 60, "iso": 3200}
-  astrophoto/command/preset/save  {"name": "deep-sky"}
-  astrophoto/command/preset/load  {"name": "deep-sky"}
-  astrophoto/command/preset/delete {"name": "deep-sky"}
   astrophoto/query/camera
   astrophoto/query/profile
-  astrophoto/query/presets
   astrophoto/query/status
 
 Status topics  (Pi 4 → n150):
@@ -59,27 +55,38 @@ INDI_HOST   = os.environ.get('INDI_HOST', 'localhost')
 INDI_PORT   = int(os.environ.get('INDI_PORT', '7624'))
 CAMERA_DEV  = os.environ.get('CAMERA_DEVICE', 'GPhoto CCD')
 PROFILE_FILE  = os.environ.get('PROFILE_FILE',  '/config/profile.json')
-PRESETS_FILE  = os.environ.get('PRESETS_FILE',  '/config/presets.json')
 CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
-TIMELAPSE_PROFILES_FILE = os.environ.get('TIMELAPSE_PROFILES_FILE',
-                                         '/config/timelapse_profiles.json')
+PROFILES_FILE = os.environ.get('PROFILES_FILE',
+                                         '/config/profiles.json')
 
 # ---- Capture profiles ----
 # Named parameter sets, usable by BOTH /astro capture and /astro timelapse.
 #
-# NAMING CONVENTION: a profile whose name starts with 'timelapse-' runs a
-# sequence - it carries an interval and a duration. Any other name is a single
-# shot and leaves interval at 0. The name tells you which you are getting, so
-# `/astro capture profile=deep-sky` cannot accidentally start a three-hour run.
+# WHAT DECIDES A TIMELAPSE: the parameters, never the name. A run is a sequence
+# if it has an interval AND a bound (frames or duration). Anything else is a
+# single shot. Partial timelapse parameters are an error rather than a silent
+# single shot - see check_timelapse_params().
 #
-# Distinct from CAMERA_PROFILES (per-body limits) and from presets, which
-# snapshot the active camera settings (frames/exposure/iso) with no timing.
+# The timelapse- prefix on the built-ins is a human label so the list reads
+# clearly. It carries no meaning to the code; rename freely.
+#
+# Distinct from CAMERA_PROFILES, which is per-body hardware limits.
 #
 # Twilight profiles ramp ISO and exposure logarithmically for ramp_duration
 # seconds, then hold at the end values for the remainder - so sunset ramps from
 # daylight to dark over 50 min, then sits at ISO 3200 / 4s for the final 40.
 # Fixed profiles omit the *_start/*_end keys entirely.
-_BUILTIN_TIMELAPSE_PROFILES = {
+_BUILTIN_PROFILES = {
+    # ---- single shot: no interval, so these take one frame ----
+    'daylight':    {'frames': 1, 'exposure': 0.002,  'iso': 100},   # 1/500, bright sun
+    'overcast':    {'frames': 1, 'exposure': 0.004,  'iso': 200},   # 1/250
+    'indoor':      {'frames': 1, 'exposure': 0.0167, 'iso': 1600},  # 1/60
+    'focus-check': {'frames': 1, 'exposure': 0.0167, 'iso': 6400},  # bright, quick, for focus
+    'moon':        {'frames': 1, 'exposure': 0.008,  'iso': 100},   # 1/125 - the moon is sunlit
+    'milky-way':   {'frames': 1, 'exposure': 20,     'iso': 3200},  # 500-rule safe to ~25s at 20mm
+    'deep-sky':    {'frames': 20, 'exposure': 30,    'iso': 1600},  # a burst of subs to stack
+
+    # ---- timelapse: interval + a bound, so these run a sequence ----
     'timelapse-sunset': {
         'duration': 5400, 'interval': 6,
         'iso_start': 100, 'iso_end': 3200,
@@ -98,30 +105,30 @@ _BUILTIN_TIMELAPSE_PROFILES = {
         'exposure_start': 1, 'exposure_end': 3,
         'ramp_duration': 1200,
     },
-    'timelapse-night-sky': {'duration': 7200,  'interval': 30, 'iso': 3200, 'exposure': 15},
-    'timelapse-stars': {'duration': 10800, 'interval': 30, 'iso': 6400, 'exposure': 20},
-    'timelapse-golden-hour': {'duration': 3600, 'interval': 5, 'iso': 100, 'exposure': 0.01},
+    'timelapse-night-sky':   {'duration': 7200,  'interval': 30, 'iso': 3200, 'exposure': 15},
+    'timelapse-stars':       {'duration': 10800, 'interval': 30, 'iso': 6400, 'exposure': 20},
+    'timelapse-golden-hour': {'duration': 3600,  'interval': 5,  'iso': 100,  'exposure': 0.01},
 }
 
 
-def load_timelapse_profiles():
+def load_profiles():
     """Built-ins merged with any user-defined profiles.
 
     User entries shadow built-ins of the same name rather than replacing them,
     so deleting a custom profile restores the built-in behaviour.
     """
-    profiles = dict(_BUILTIN_TIMELAPSE_PROFILES)
+    profiles = dict(_BUILTIN_PROFILES)
     try:
-        with open(TIMELAPSE_PROFILES_FILE) as fh:
+        with open(PROFILES_FILE) as fh:
             profiles.update(json.load(fh))
     except FileNotFoundError:
         pass
     except Exception as e:
-        log.warning(f'Could not read {TIMELAPSE_PROFILES_FILE}: {e}')
+        log.warning(f'Could not read {PROFILES_FILE}: {e}')
     return profiles
 
 
-def describe_timelapse_profile(p, is_builtin=False):
+def describe_profile(p, is_builtin=False):
     """One-line human summary of a timelapse profile, for the Telegram list."""
     bits = []
     if p.get('duration'):
@@ -154,6 +161,36 @@ def _fmt_num(v):
     return str(int(f)) if f == int(f) else str(f)
 
 
+def check_timelapse_params(params):
+    """Decide single shot vs sequence from the parameters, never the name.
+
+    A sequence needs an interval AND a bound - frames or duration - otherwise
+    it either has no spacing or no end. Partial parameters are rejected rather
+    than quietly downgraded to a single shot: someone who passed duration=7200
+    meant to run for two hours, and silently taking one frame instead is the
+    kind of thing you only discover the next morning.
+
+    frames on its own is NOT a timelapse - it is a burst, which is how you
+    shoot subs for stacking.
+
+    Returns (ok, error_message).
+    """
+    has_interval = float(params.get('interval', 0) or 0) > 0
+    has_duration = float(params.get('duration', 0) or 0) > 0
+    has_frames = int(float(params.get('frames', 0) or 0)) > 0
+
+    if not has_interval and not has_duration:
+        return True, None                      # single shot (or a burst)
+    if has_interval and (has_duration or has_frames):
+        return True, None                      # spacing and an end
+    if has_duration and not has_interval:
+        return False, ('Not enough timelapse parameters: duration given without '
+                       'interval. Add interval=S for the gap between frames.')
+    return False, ('Not enough timelapse parameters: interval given without '
+                   'frames or duration, so the run would never end. Add '
+                   'duration=S or frames=N.')
+
+
 def apply_profile(params):
     """Expand params['profile'] into the run's parameters.
 
@@ -168,7 +205,7 @@ def apply_profile(params):
     name = str(params.get('profile', '')).strip()
     if not name:
         return params
-    profiles = load_timelapse_profiles()
+    profiles = load_profiles()
     if name not in profiles:
         pub('event/error', {'message': 'Unknown timelapse profile: ' + name
                             + '. Available: ' + ', '.join(sorted(profiles))})
@@ -176,12 +213,6 @@ def apply_profile(params):
     merged = dict(profiles[name])
     merged.update({k: v for k, v in params.items() if k != 'profile'})
     merged['profile_name'] = name
-    # Enforce the naming convention rather than just documenting it: a profile
-    # not named timelapse-* is a single shot, so drop any timing it carries.
-    # Explicitly passing interval= still wins, since that is a deliberate act.
-    if not name.startswith('timelapse-') and 'interval' not in params:
-        merged.pop('interval', None)
-        merged.pop('duration', None)
     log.info(f'Profile {name} -> {merged}')
     return merged
 
@@ -202,12 +233,12 @@ CAMERA_PROFILES = {
 _PROFILE_DEFAULTS = {
     'camera': 'a6400',
     'camera_defaults': {
-        'a6400': {'frames': 1, 'exposure': 0.01, 'iso': 400},
+        'a6400': {'frames': 1, 'exposure': 0.004, 'iso': 200},  # daytime single shot
     },
 }
 
 _profile = {}
-_current_profile = {'frames': 1, 'exposure': 0.01, 'iso': 400}  # in-memory, not persisted
+_current_profile = {'frames': 1, 'exposure': 0.004, 'iso': 200}  # in-memory, not persisted
 
 
 def load_profile():
@@ -247,26 +278,6 @@ def save_profile():
             json.dump(_profile, f, indent=2)
     except Exception as e:
         log.error(f'Profile save error: {e}')
-
-
-def load_presets():
-    try:
-        with open(PRESETS_FILE) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        log.error(f'Presets load error: {e}')
-        return {}
-
-
-def save_presets(presets):
-    try:
-        os.makedirs(os.path.dirname(PRESETS_FILE), exist_ok=True)
-        with open(PRESETS_FILE, 'w') as f:
-            json.dump(presets, f, indent=2)
-    except Exception as e:
-        log.error(f'Presets save error: {e}')
 
 
 def current_camera_cfg():
@@ -786,7 +797,10 @@ class INDIClient:
 
 # ---- Capture logic ----
 
-PREVIEW_DEFAULTS = {'frames': 1, 'exposure': 0.001, 'iso': 1600}
+# Preview is "show me what the camera sees right now" - it uses the daylight
+# profile rather than its own hardcoded numbers, so there is a single place
+# that defines a sensible ordinary frame. Override per-command as usual.
+PREVIEW_PROFILE = os.environ.get('PREVIEW_PROFILE', 'daylight')
 
 _capturing = False
 _capture_lock = threading.Lock()
@@ -917,6 +931,15 @@ def run_capture(params):
 
     # A named profile only supplies defaults; anything given explicitly wins.
     params = apply_profile(params)
+
+    ok, err = check_timelapse_params(params)
+    if not ok:
+        log.warning(err)
+        pub('event/error', {'message': err})
+        with _capture_lock:
+            _capturing = False
+        pub('status', {'state': 'idle'})
+        return
 
     output = params.get('output', '/shots')
     delay_start = float(params.get('delay_start', 0))
@@ -1288,51 +1311,17 @@ def on_message(client, userdata, msg):
     elif topic == 'query/profile':
         pub('event/profile', dict(_current_profile))
 
-    elif topic == 'query/presets':
-        pub('event/presets', {'presets': load_presets()})
-
-    elif topic == 'command/preset/save':
-        name = payload.get('name', '').strip()
-        if not name:
-            pub('event/error', {'message': 'preset/save: name required'})
-            return
-        presets = load_presets()
-        presets[name] = dict(_current_profile)
-        save_presets(presets)
-        log.info(f'Preset saved: {name} = {_current_profile}')
-        pub('event/preset', {'action': 'saved', 'name': name, **_current_profile})
-
-    elif topic == 'command/preset/load':
-        name = payload.get('name', '').strip()
-        presets = load_presets()
-        if name not in presets:
-            pub('event/error', {'message': f'Preset "{name}" not found. Use /astro preset list.'})
-            return
-        _current_profile.clear()
-        _current_profile.update(presets[name])
-        log.info(f'Preset loaded: {name} -> {_current_profile}')
-        pub('event/preset', {'action': 'loaded', 'name': name, **_current_profile})
-
-    elif topic == 'command/preset/delete':
-        name = payload.get('name', '').strip()
-        presets = load_presets()
-        if name not in presets:
-            pub('event/error', {'message': f'Preset "{name}" not found.'})
-            return
-        del presets[name]
-        save_presets(presets)
-        log.info(f'Preset deleted: {name}')
-        pub('event/preset', {'action': 'deleted', 'name': name})
-
     elif topic == 'command/preview':
         with _capture_lock:
             if _capturing:
                 pub('event/error', {'message': 'Already capturing'})
                 return
             _capturing = True
-        preview_params = dict(PREVIEW_DEFAULTS)
+        preview_params = dict(load_profiles().get(PREVIEW_PROFILE, {}))
         preview_params.update(payload)
-        preview_params['frames'] = 1   # always single frame
+        preview_params['frames'] = 1        # always a single frame
+        preview_params.pop('interval', None)   # and never a sequence
+        preview_params.pop('duration', None)
         threading.Thread(target=run_capture, args=(preview_params,), daemon=True).start()
 
     elif topic in ('query/exposures', 'query/isos'):
@@ -1368,58 +1357,93 @@ def on_message(client, userdata, msg):
                     pass
         threading.Thread(target=_battery_query, daemon=True).start()
 
-    elif topic == 'query/timelapse_profiles':
-        profiles = load_timelapse_profiles()
-        builtin = set(_BUILTIN_TIMELAPSE_PROFILES)
+    elif topic == 'query/profiles':
+        profiles = load_profiles()
+        builtin = set(_BUILTIN_PROFILES)
         # The Telegram formatter concatenates each value as a string, so send a
         # human summary per profile and keep the raw parameters alongside it.
-        pub('event/timelapse_profiles', {
-            'profiles': {n: describe_timelapse_profile(p, n in builtin)
+        pub('event/profiles', {
+            'profiles': {n: describe_profile(p, n in builtin)
                          for n, p in sorted(profiles.items())},
             'params': profiles,
             'builtin': sorted(builtin),
             'custom': sorted(set(profiles) - builtin),
         })
 
-    elif topic == 'command/timelapse_profile/save':
+    elif topic == 'command/profile/save':
+        # Snapshot the active settings as a named profile.
+        name = payload.get('name', '').strip()
+        if not name:
+            pub('event/error', {'message': 'profile/save: name required'})
+            return
+        entry = dict(_current_profile)
+        try:
+            try:
+                with open(PROFILES_FILE) as _f:
+                    user = json.load(_f)
+            except FileNotFoundError:
+                user = {}
+            user[name] = entry
+            os.makedirs(os.path.dirname(PROFILES_FILE), exist_ok=True)
+            with open(PROFILES_FILE, 'w') as _f:
+                json.dump(user, _f, indent=2)
+            log.info(f'Profile saved from active settings: {name} = {entry}')
+            pub('event/info', {'message': '\u2705 Profile *' + name + '* saved: '
+                               + describe_profile(entry, False)})
+        except Exception as e:
+            pub('event/error', {'message': f'Profile save failed: {e}'})
+
+    elif topic == 'command/profile/load':
+        # Make a profile the active settings, so a bare /astro capture uses it.
+        name = payload.get('name', '').strip()
+        profiles = load_profiles()
+        if name not in profiles:
+            pub('event/error', {'message': f'Profile "{name}" not found. Use /astro profiles.'})
+            return
+        _current_profile.clear()
+        _current_profile.update(profiles[name])
+        log.info(f'Profile loaded into active settings: {name} -> {_current_profile}')
+        pub('event/profile', {'action': 'loaded', 'name': name, **_current_profile})
+
+    elif topic == 'command/profile/add':
         name = payload.get('name', '').strip()
         if not name:
             pub('event/error', {'message': 'timelapse_profile/save: name required'})
             return
-        profiles = load_timelapse_profiles()
+        profiles = load_profiles()
         entry = {k: v for k, v in payload.items() if k != 'name'}
         # Save to user profiles file (built-ins not overwritten in file, just shadowed)
         try:
-            os.makedirs(os.path.dirname(TIMELAPSE_PROFILES_FILE), exist_ok=True)
+            os.makedirs(os.path.dirname(PROFILES_FILE), exist_ok=True)
             try:
-                with open(TIMELAPSE_PROFILES_FILE) as _f:
+                with open(PROFILES_FILE) as _f:
                     user_profiles = json.load(_f)
             except FileNotFoundError:
                 user_profiles = {}
             user_profiles[name] = entry
-            with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
+            with open(PROFILES_FILE, 'w') as _f:
                 json.dump(user_profiles, _f, indent=2)
             log.info(f'Profile saved: {name} = {entry}')
             pub('event/info', {'message': f'✅ Profile *{name}* saved: ' + ', '.join(f'{k}={v}' for k, v in entry.items())})
         except Exception as e:
             pub('event/error', {'message': f'Profile save failed: {e}'})
 
-    elif topic == 'command/timelapse_profile/delete':
+    elif topic == 'command/profile/delete':
         name = payload.get('name', '').strip()
         if not name:
             pub('event/error', {'message': 'timelapse_profile/delete: name required'})
             return
-        if name in _BUILTIN_TIMELAPSE_PROFILES:
+        if name in _BUILTIN_PROFILES:
             pub('event/error', {'message': f"Cannot delete built-in profile '{name}' — only custom profiles can be deleted."})
             return
         try:
-            with open(TIMELAPSE_PROFILES_FILE) as _f:
+            with open(PROFILES_FILE) as _f:
                 user_profiles = json.load(_f)
             if name not in user_profiles:
                 pub('event/error', {'message': 'Profile not found: ' + name})
                 return
             del user_profiles[name]
-            with open(TIMELAPSE_PROFILES_FILE, 'w') as _f:
+            with open(PROFILES_FILE, 'w') as _f:
                 json.dump(user_profiles, _f, indent=2)
             log.info(f'Profile deleted: {name}')
             pub('event/info', {'message': f'✅ Profile *{name}* deleted.'})
