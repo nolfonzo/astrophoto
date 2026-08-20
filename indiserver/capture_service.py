@@ -127,7 +127,7 @@ SHOTS_GID = int(os.environ.get('SHOTS_GID', '1000'))
 def _ensure_output_dir(output):
     """Create the output directory owned by the bridge's uid, not root."""
     existed = os.path.isdir(output)
-    _ensure_output_dir(output)
+    os.makedirs(output, exist_ok=True)
     if not existed:
         try:
             os.chown(output, SHOTS_UID, SHOTS_GID)
@@ -422,17 +422,41 @@ def _capture_gphoto2_bulb(exposure, iso, prefix, output):
     _ensure_output_dir(output)
     seconds = max(1, int(round(exposure)))
 
-    cmd = ['gphoto2',
-           '--set-config', 'shutterspeed=bulb']
+    # Two traps here, both verified on hardware 2026-08-20 against the a6400.
+    #
+    # 1. The shutter speed must be set by FULL PATH with a capital B.
+    #    'shutterspeed=bulb' fails with "Property 'shutterspeed' not found",
+    #    which is a misleading message - the property exists, the lowercase
+    #    value does not match the 'Bulb' choice.
+    # 2. '--bulb=N' does nothing on this body. It exits 0, produces no file,
+    #    and returns early - which looked exactly like a 30s bulb ceiling.
+    #    The shutter has to be opened and closed explicitly via the
+    #    /main/actions/bulb toggle, with the exposure spent waiting between.
+    #
+    # Setting shutterspeed is a separate invocation: combining it with the
+    # bulb toggle in one command is what produced the "not found" error.
+    pre = ['gphoto2', '--set-config', '/main/capturesettings/shutterspeed=Bulb']
     if iso_str:
-        cmd += ['--set-config', f'iso={iso_str}']
-    cmd += [f'--bulb={seconds}',
-            '--filename', os.path.join(output, f'{prefix}_%n.%C'),
-            '--force-overwrite']
+        pre += ['--set-config', f'iso={iso_str}']
+    rp = subprocess.run(pre, capture_output=True, text=True, timeout=60)
+    if rp.returncode != 0:
+        raise RuntimeError(f'gphoto2 bulb setup failed: {rp.stderr.strip()}')
+
+    # Downloading a 24MB ARW off the a6400 takes a few seconds; be generous
+    # rather than truncating the transfer and losing the frame.
+    download_wait = max(15, seconds // 4)
+    cmd = ['gphoto2',
+           '--set-config', '/main/actions/bulb=1',
+           '--wait-event=%ds' % seconds,
+           '--set-config', '/main/actions/bulb=0',
+           '--wait-event-and-download=%ds' % download_wait,
+           '--filename', os.path.join(output, f'{prefix}_%n.%C'),
+           '--force-overwrite']
 
     log.info(f'gphoto2 bulb: {seconds}s iso={iso}')
     t0 = time.time()
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60)
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=seconds + download_wait + 60)
     if r.returncode != 0:
         raise RuntimeError(f'gphoto2 bulb failed: {r.stderr.strip()}')
     log.info(f'gphoto2 bulb done in {time.time()-t0:.1f}s')
