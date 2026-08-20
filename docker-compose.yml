@@ -51,6 +51,7 @@ services:
       - "8080:80"
     volumes:
       - ./shots:/usr/share/nginx/html:ro
+      - ./console:/console:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     environment:
       - TZ=${TZ:-UTC}

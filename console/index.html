@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Astro Console</title>
+<style>
+/* Stark: no cards, sections separated by a hairline and whitespace. The one
+   exception is buttons, which get a surface - on a dark ground an outlined
+   button recedes and stops reading as something you can press.
+   Dark throughout because this is used at night. Single theme on purpose. */
+:root{
+  --bg:#141619;
+  --ink:#EAECF0;
+  --body:#A8AEBB;
+  --dim:#7E8593;
+  --line:#2C3037;
+  --raised:#22262D;
+  --accent:#9FB6D0;
+  --warn:#C9A15A;
+  --bad:#D08A8A;
+  --live:#8FC7A2;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:13.5px;line-height:1.5;padding:0 0 4rem;
+}
+header{padding:1.4rem 1.25rem .9rem;border-bottom:1px solid var(--line)}
+header h1{margin:0;font-size:1.3rem;font-weight:600}
+header p{margin:.2rem 0 0;font-size:.8rem;color:var(--dim)}
+header .conn{color:var(--bad)}
+header .conn.ok{color:var(--live)}
+
+.wrap{max-width:560px;margin:0 auto;padding:0 1.25rem}
+section{padding:1.6rem 0;border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+section > h2{margin:0 0 1rem;font-size:1.15rem;font-weight:600;color:var(--ink)}
+section > .body{display:flex;flex-direction:column;gap:1rem;color:var(--body)}
+
+.state{font-size:.92rem;font-weight:500;color:var(--ink)}
+.state.on{color:var(--live)}
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:.32rem 1.2rem;margin:0;font-size:.85rem}
+dl.kv dt{color:var(--dim);font-size:.8rem}
+dl.kv dd{margin:0;color:var(--ink);font-weight:500;font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+label.f{display:flex;flex-direction:column;gap:.2rem}
+label.f > span{font-size:.75rem;color:var(--dim)}
+select,input{
+  width:100%;min-height:40px;padding:.4rem 0;color:var(--ink);
+  border:0;border-bottom:1px solid var(--line);border-radius:0;
+  font-family:var(--mono);font-size:.9rem;font-weight:500;font-variant-numeric:tabular-nums;
+}
+input{background:transparent}
+/* A select needs a real background-colour: the popup list inherits it, and
+   `transparent` leaves the OS drawing dark text on a white sheet. The arrow
+   is drawn here because appearance:none removes the native one. */
+select{
+  appearance:none;-webkit-appearance:none;background-color:var(--bg);cursor:pointer;
+  background-image:url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237E8593' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right .1rem center;padding-right:1.5rem;
+}
+select option,select optgroup{background-color:#1E2127;color:var(--ink)}
+select optgroup{color:var(--dim);font-style:normal}
+select:focus-visible,input:focus-visible{outline:0;border-bottom-color:var(--accent)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
+.edited > span::after{content:" · edited";color:var(--accent)}
+.edited select,.edited input{border-bottom-color:var(--accent)}
+
+button{
+  min-height:38px;padding:.45rem 1rem;background:var(--raised);
+  border:1px solid #3A4048;border-radius:3px;color:var(--ink);
+  font-family:var(--sans);font-size:.84rem;font-weight:500;cursor:pointer;
+}
+button:hover:not(:disabled){background:#2A2F37;border-color:#4A515B}
+button:active:not(:disabled){background:#1C2027}
+button:disabled{opacity:.32;cursor:default}
+button.primary{background:#2C3A49;border-color:var(--accent);color:#DCE7F2}
+button.primary:hover:not(:disabled){background:#35485A}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
+.wide{width:100%}
+#savebar{display:flex;flex-direction:column;gap:1rem}
+#savebar[hidden]{display:none}
+
+.msg{margin:0;font-size:.82rem;color:var(--dim)}
+.msg.warn{color:var(--warn)}
+.msg.bad{color:var(--bad)}
+.msg[hidden]{display:none}
+
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{text-align:left;font-weight:500;color:var(--dim);font-size:.7rem;
+   letter-spacing:.09em;text-transform:uppercase;padding:0 0 .5rem}
+td{padding:.5rem 0;border-top:1px solid var(--line)}
+td.id{font-family:var(--mono);white-space:nowrap;color:var(--ink)}
+td.status{color:var(--dim);font-size:.8rem;white-space:nowrap}
+td.act{text-align:right;width:1%;white-space:nowrap}
+td.act button{min-height:30px;padding:.2rem .7rem;font-size:.8rem;margin-left:.4rem}
+.empty{color:var(--dim);padding:.5rem 0}
+
+.shot{width:100%;border:1px solid var(--line);display:block;background:#0D0F12}
+.shotwrap{min-height:120px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line);color:var(--dim);font-size:.84rem}
+#toast{position:fixed;left:50%;bottom:1.25rem;transform:translateX(-50%);
+  background:var(--bg);border:1px solid var(--line);padding:.5rem .9rem;font-size:.85rem;max-width:90vw}
+#toast[hidden]{display:none}
+</style>
+</head>
+<body>
+
+<div id="toast" hidden></div>
+
+<header>
+  <h1>Astro Console</h1>
+  <p><span id="site">…</span> · <span class="conn" id="conn">connecting…</span></p>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <h2>Current</h2>
+    <div class="body">
+      <div class="state" id="state">—</div>
+      <dl class="kv">
+        <dt>Profile</dt><dd id="s-prof">—</dd>
+        <dt>Will shoot</dt><dd id="s-what">—</dd>
+        <dt>Exposure</dt><dd id="s-exp">—</dd>
+        <dt>ISO</dt><dd id="s-iso">—</dd>
+      </dl>
+      <div class="actions">
+        <button id="preview">Preview</button>
+        <button class="primary" id="fire">Capture</button>
+      </div>
+      <button id="abort" class="wide" disabled>Abort</button>
+      <p class="msg" id="err" hidden></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Last frame</h2>
+    <div class="body">
+      <div class="shotwrap" id="shotwrap">No frame yet</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Profiles</h2>
+    <div class="body">
+      <label class="f"><span>Profile to view or edit</span>
+        <select id="profile"></select>
+      </label>
+      <div class="row">
+        <label class="f" id="l-exp"><span>Exposure (s)</span><select id="exp"></select></label>
+        <label class="f" id="l-iso"><span>ISO</span><select id="iso"></select></label>
+      </div>
+      <div class="row">
+        <label class="f" id="l-frm"><span>Frames</span><input id="frm" inputmode="numeric"></label>
+        <label class="f" id="l-ivl"><span>Interval (s)</span><input id="ivl" inputmode="numeric" placeholder="—"></label>
+      </div>
+      <label class="f" id="l-dur"><span>Duration (min)</span><input id="dur" inputmode="numeric" placeholder="—"></label>
+      <p class="msg" id="msg"></p>
+      <div id="savebar" hidden>
+        <label class="f"><span>Save as</span><input id="savename" autocomplete="off" spellcheck="false"></label>
+        <div class="actions">
+          <button class="primary" id="save">Save</button>
+          <button id="reset">Discard changes</button>
+        </div>
+      </div>
+      <button id="load" class="wide">Load as current profile</button>
+      <p class="msg" id="loadmsg" hidden></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Photos</h2>
+    <div class="body">
+      <div class="tw"><table>
+        <thead><tr><th>ID</th><th>Status</th><th></th></tr></thead>
+        <tbody id="photo-rows"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Timelapses</h2>
+    <div class="body">
+      <div class="tw"><table>
+        <thead><tr><th>ID</th><th>Frames</th><th>Status</th><th></th></tr></thead>
+        <tbody id="tl-rows"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Camera</h2>
+    <div class="body">
+      <dl class="kv">
+        <dt>Body</dt><dd id="c-body">—</dd>
+        <dt>Exposure</dt><dd id="c-exp">—</dd>
+        <dt>ISO</dt><dd id="c-iso">—</dd>
+        <dt>Bulb</dt><dd>automatic above 30s</dd>
+      </dl>
+    </div>
+  </section>
+
+</div>
+
+<script src="mqtt.min.js"></script>
+<script src="console.js"></script>
+</body>
+</html>
