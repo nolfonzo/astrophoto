@@ -161,6 +161,14 @@ def _fmt_num(v):
     return str(int(f)) if f == int(f) else str(f)
 
 
+def _fmt_exposure(v):
+    """Shutter-speak: sub-second exposures read as 1/N, the rest as seconds."""
+    f = float(v)
+    if 0 < f < 1:
+        return '1/%s' % _fmt_num(round(1 / f))
+    return _fmt_num(f)
+
+
 def check_timelapse_params(params):
     """Decide single shot vs sequence from the parameters, never the name.
 
@@ -219,12 +227,20 @@ def apply_profile(params):
 # ---- Camera profiles ----
 
 CAMERA_PROFILES = {
-    # min/max_exposure: 1/32000s (electronic shutter) to 3600s (bulb via star engine)
-    # daytime engine is limited to 30s discrete; star engine uses gphoto2 --bulb
+    # max_exposure 3600s is our own cap on bulb (star engine, gphoto2 --bulb);
+    # the daytime engine is limited to the 30s discrete ladder.
     # min/max_iso: standard range; extended (50, 51200+) requires camera menu
+    #
+    # min_exposure is NOT what the camera advertises. Verified on hardware
+    # 2026-08-20: the a6400 lists shutter choices down to 1/32000 over PTP but
+    # silently clamps to 1/4000 when you set one - setting 1/32000 reads back as
+    # 1/4000. Trusting the advertised list would let a request for 1/8000 pass
+    # our range check and then be shot at 1/4000 without anyone being told.
     'a6400': {'max_x': 6000, 'max_y': 4000, 'pixel_um': 3.91, 'bits': 14,
-              'min_exposure': 1/32000, 'max_exposure': 3600,
+              'min_exposure': 1/4000, 'max_exposure': 3600,
               'min_iso': 100, 'max_iso': 32000},
+    # a6700 limits are from the spec sheet, NOT verified against hardware -
+    # check the clamp behaviour above before trusting min_exposure here.
     'a6700': {'max_x': 6192, 'max_y': 4128, 'pixel_um': 3.76, 'bits': 14,
               'min_exposure': 1/32000, 'max_exposure': 3600,
               'min_iso': 100, 'max_iso': 32000},
@@ -327,24 +343,30 @@ def resolve_capture_params(params, mode):
     norm = normalise_mode(mode)
     if is_manual(mode) or norm == 'Unknown':
         # Manual mode, OR probe failed — honour all requested params either way
+        # Out of range is an error, not a clamp. Silently shooting something
+        # other than what was asked for is how you find out the next morning
+        # that a whole night was taken at the wrong exposure. ISO was worse
+        # still - it clamped with no note at all.
         exposure = float(params.get('exposure', defaults['exposure']))
-        min_exp = cfg['min_exposure']
-        max_exp = cfg['max_exposure']
-        if exposure < min_exp:
-            log.warning(f'Exposure {exposure}s below camera minimum; clamped to {min_exp}s')
-            ignored.append(f'exposure clamped to {min_exp}s (below camera minimum)')
-            exposure = min_exp
-        elif exposure > max_exp:
-            log.warning(f'Exposure {exposure}s above camera maximum; clamped to {max_exp}s')
-            ignored.append(f'exposure clamped to {max_exp}s (above camera maximum)')
-            exposure = max_exp
+        min_exp, max_exp = cfg['min_exposure'], cfg['max_exposure']
+        if exposure < min_exp or exposure > max_exp:
+            raise ValueError(
+                'Exposure %s s is outside the %s range (%s to %s s). '
+                'See /astro limits.' % (_fmt_exposure(exposure), _profile.get('camera', 'camera'),
+                                        _fmt_exposure(min_exp), _fmt_exposure(max_exp)))
         iso = int(params.get('iso', defaults['iso']))
-        iso = max(cfg['min_iso'], min(cfg['max_iso'], iso))
+        if iso < cfg['min_iso'] or iso > cfg['max_iso']:
+            raise ValueError(
+                'ISO %d is outside the %s range (%d to %d). See /astro isos.'
+                % (iso, _profile.get('camera', 'camera'), cfg['min_iso'], cfg['max_iso']))
     elif normalise_mode(mode) in ('Aperture', 'Shutter', 'Program'):
         # Camera controls shutter or both; just trigger with minimum value
         exposure = 0.001
         iso = int(params.get('iso', defaults['iso']))
-        iso = max(cfg['min_iso'], min(cfg['max_iso'], iso))
+        if iso < cfg['min_iso'] or iso > cfg['max_iso']:
+            raise ValueError(
+                'ISO %d is outside the %s range (%d to %d). See /astro isos.'
+                % (iso, _profile.get('camera', 'camera'), cfg['min_iso'], cfg['max_iso']))
         if 'exposure' in params:
             ignored.append('exposure')
     else:
@@ -958,7 +980,15 @@ def run_capture(params):
         params['frames'] = math.ceil(duration_s / interval)
         log.info(f'Timelapse: duration={duration_s}s interval={interval}s -> {params["frames"]} frames')
 
-    frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
+    try:
+        frames, exposure, iso, ignored = resolve_capture_params(params, raw_mode)
+    except ValueError as e:
+        log.warning(str(e))
+        pub('event/error', {'message': str(e)})
+        with _capture_lock:
+            _capturing = False
+        pub('status', {'state': 'idle'})
+        return
     camera = _profile.get('camera', 'unknown')
 
     # --- Exposure ramp (timelapse only) ---

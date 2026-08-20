@@ -38,18 +38,9 @@
 <div class="cols">
 
 <section>
-<h2>The one rule</h2>
-<div class="note">
-<b>Parameters decide, not names.</b> A run with an <b>interval</b> and a
-<b>bound</b> (frames or duration) is a timelapse. Anything else is a single shot.
-Partial timing is rejected, not guessed.
-</div>
-</section>
-
-<section>
 <h2>Capture</h2>
 <table>
-<tr><td class="c">/astro capture</td><td class="d">One frame, active profile</td></tr>
+<tr><td class="c">/astro capture</td><td class="d">Runs the active profile</td></tr>
 <tr><td class="c">/astro capture profile=&lt;name&gt;</td><td class="d">Use a named profile</td></tr>
 <tr><td class="c">/astro capture <span class="opt">exposure=S iso=N frames=N</span></td><td class="d">Override anything</td></tr>
 <tr><td class="c">/astro capture <span class="opt">interval=S duration=S</span></td><td class="d">&hellip;makes it a timelapse</td></tr>
@@ -97,7 +88,8 @@ already running finishes first.</div>
 <tr><td>timelapse-golden-hour</td><td>60 min</td><td>5 s</td><td>100</td><td>0.01 s</td></tr>
 </table>
 <div class="note">The <code>timelapse-</code> prefix is only a label. What makes
-a run a sequence is the interval it carries.</div>
+a run a sequence is the interval it carries, plus a bound &mdash; frames or
+duration. Partial timing is rejected, not guessed.</div>
 </section>
 
 <section>
@@ -138,7 +130,7 @@ the newest 200 frames, so archive a long run before it prunes itself.
 <tr><td class="c">/astro defaults <span class="opt">k=v</span></td><td class="d">Per-camera baseline</td></tr>
 <tr><td class="c">/astro defaults load</td><td class="d">Reset active to baseline</td></tr>
 <tr><td class="c">/astro battery</td><td class="d">Battery level</td></tr>
-<tr><td class="c">/astro limits</td><td class="d">Exposure and ISO limits</td></tr>
+<tr><td class="c">/astro limits</td><td class="d">Exposure and ISO limits &mdash; outside them is an error, never a silent clamp</td></tr>
 <tr><td class="c">/astro exposures</td><td class="d">Valid shutter speeds</td></tr>
 <tr><td class="c">/astro isos</td><td class="d">Valid ISO values</td></tr>
 </table>
@@ -157,8 +149,11 @@ If it enumerates as &ldquo;charging mode&rdquo;, gphoto2 cannot see it.<br>
 <section>
 <h2>Rules of thumb</h2>
 <div class="note">
-<b>500 rule.</b> Longest exposure before star trails &asymp; 500 &divide; focal
-length. 20&thinsp;mm &rarr; ~25&thinsp;s.<br>
+<b>500 rule.</b> Star trails start at &asymp; 500 &divide; (focal &times; 1.5)
+on this APS-C body &mdash; the crop factor is easy to forget. 20&thinsp;mm
+&rarr; ~17&thinsp;s, not 25.<br>
+<b>NPF is stricter.</b> For pin-point stars at 100%, 20&thinsp;mm f/2.8
+&rarr; ~11&thinsp;s. The 500 rule was written for film.<br>
 <b>Bulb is automatic</b> above 30&thinsp;s.<br>
 <b>Mount control is not implemented</b> &mdash; <code>/astro track</code> says so.
 </div>
