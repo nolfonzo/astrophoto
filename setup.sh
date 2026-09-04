@@ -66,7 +66,7 @@ info "Creating required directories..."
 mkdir -p shots config
 ok "Directories ready."
 
-# ── 4. Config files (profile + presets) ──────────────────────────────────────
+# ── 4. Config files (profile + profiles) ─────────────────────────────────────
 if [ ! -f config/profile.json ]; then
   info "Creating default config/profile.json..."
   cat > config/profile.json << 'JSON'
@@ -86,12 +86,12 @@ else
   ok "config/profile.json already exists, skipping."
 fi
 
-if [ ! -f config/presets.json ]; then
-  info "Creating empty config/presets.json..."
-  echo '{}' > config/presets.json
-  ok "config/presets.json created."
+if [ ! -f config/profiles.json ]; then
+  info "Creating empty config/profiles.json..."
+  echo '{}' > config/profiles.json
+  ok "config/profiles.json created."
 else
-  ok "config/presets.json already exists, skipping."
+  ok "config/profiles.json already exists, skipping."
 fi
 
 # ── 5. Ownership ──────────────────────────────────────────────────────────────
