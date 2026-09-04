@@ -5,3 +5,4 @@ captures/
 __pycache__/
 *.pyc
 .DS_Store
+config/profiles.json
