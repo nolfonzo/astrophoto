@@ -58,6 +58,13 @@ PROFILE_FILE  = os.environ.get('PROFILE_FILE',  '/config/profile.json')
 CAPTURE_SERVICE_PORT = int(os.environ.get('CAPTURE_SERVICE_PORT', '7625'))
 PROFILES_FILE = os.environ.get('PROFILES_FILE',
                                          '/config/profiles.json')
+# Presets promoted to travel between rigs. Tracked in the repo, so a good
+# timelapse dialled in at one site is pulled by the other. Sits between the
+# built-ins and the local PROFILES_FILE: shared overrides built-ins, and a
+# local save still overrides shared, so a rig can experiment without disturbing
+# what everyone gets.
+SHARED_PROFILES_FILE = os.environ.get('SHARED_PROFILES_FILE',
+                                         '/config/shared-profiles.json')
 
 # ---- Capture profiles ----
 # Named parameter sets, usable by BOTH /astro capture and /astro timelapse.
@@ -112,19 +119,25 @@ _BUILTIN_PROFILES = {
 
 
 def load_profiles():
-    """Built-ins merged with any user-defined profiles.
+    """Built-ins merged with shared and then local user-defined profiles.
 
-    User entries shadow built-ins of the same name rather than replacing them,
-    so deleting a custom profile restores the built-in behaviour.
+    Precedence, lowest to highest: built-ins (in code) < shared (repo-tracked,
+    same on every rig) < local (this rig's PROFILES_FILE). A local save shadows
+    a shared or built-in of the same name rather than replacing it, so deleting
+    the local copy restores the shared/built-in behaviour.
+
+    Re-read on every call, so a promoted preset pulled from git is picked up on
+    the next capture with no restart.
     """
     profiles = dict(_BUILTIN_PROFILES)
-    try:
-        with open(PROFILES_FILE) as fh:
-            profiles.update(json.load(fh))
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        log.warning(f'Could not read {PROFILES_FILE}: {e}')
+    for path in (SHARED_PROFILES_FILE, PROFILES_FILE):
+        try:
+            with open(path) as fh:
+                profiles.update(json.load(fh))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning(f'Could not read {path}: {e}')
     return profiles
 
 
